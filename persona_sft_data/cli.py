@@ -5,7 +5,7 @@
     persona-sft-data export  --config configs/<이름>.json [--name <데이터셋 이름>]
     persona-sft-data sources --config configs/<이름>.json [--sample N] [--translate]
     persona-sft-data status  --config configs/<이름>.json [--watch]
-    persona-sft-data plugins
+    persona-sft-data plugins [--config configs/<이름>.json]
     persona-sft-data init <이름> [--profile <프로필>]
 
 명령 하나가 클래스 하나다(Command). ``main``은 파서 구성과 디스패치만 한다. 어떤
@@ -174,6 +174,13 @@ class Sources(Command):
             ctx = runner.build_context(stage, config)
             tcfg = config.teacher_for("ingest")
             teacher = TEACHERS.get(tcfg.kind).build(tcfg)
+            try:
+                # 교사에 닿는지 먼저 본다. 이걸 건너뛰면 서버가 죽었을 때 재시도 대기
+                # 뒤 원문만 찍고 조용히 성공으로 끝나 번역 전후를 볼 수 없다.
+                teacher.check()
+            except TeacherError as exc:
+                print(f"교사 오류: {exc}", file=sys.stderr)
+                return 1
             translator = TRANSLATORS.get(ctx.settings.translator).build(ctx, teacher)
         cache = config.data_root / "cache"
         for name, source in config.sources.items():
@@ -182,9 +189,13 @@ class Sources(Command):
                 continue
             sample = list(islice(read_utterances(source, data), args.sample))
             print(f"\n[{name}] format={source.format} language={source.language} license={source.license}")
-            translated = translator.translate(sample, source.language) if translator and source.language != config.language else [None] * len(sample)
+            translating = translator is not None and source.language != config.language
+            translated = translator.translate(sample, source.language) if translating else [None] * len(sample)
             for text, tr in zip(sample, translated):
-                print(f"  {text}" + (f"  →  {tr}" if tr else ""))
+                if not translating:
+                    print(f"  {text}")
+                else:
+                    print(f"  {text}  →  {tr or '(번역 실패)'}")
         return 0
 
 
@@ -193,9 +204,12 @@ class Plugins(Command):
     help = "등록된 플러그인을 그룹별로 보여 준다"
 
     def configure(self, parser: argparse.ArgumentParser) -> None:
-        return None
+        # --config는 선택이다. 주면 설정의 로컬 플러그인까지 붙여 'plugins' 출처를 보여 준다.
+        parser.add_argument("--config", type=Path, help="이 설정의 plugins 목록을 먼저 붙인다")
 
     def run(self, args: argparse.Namespace) -> int:
+        if args.config is not None:
+            load_config(args.config)
         for group, registry in GROUPS.items():
             print(f"\n{group}")
             for reg in registry.describe():

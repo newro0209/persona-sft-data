@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from persona_sft_data.core.registry import PROFILES
+from persona_sft_data.core.registry import GROUPS, PROFILES
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "personas" / "mongle.md"
@@ -63,6 +63,20 @@ def write_config(tmp_path: Path, **overrides) -> Path:
     path = tmp_path / "configs" / "test.json"
     path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
+
+
+@pytest.fixture(autouse=True)
+def _isolated_registries():
+    """테스트 함수가 등록한 플러그인은 그 함수 밖으로 새지 않는다.
+
+    plugins가 builtin보다 우선하므로 자리 표시 하나가 세션에 남으면 뒤따르는 모듈이
+    진짜 구현 대신 그것을 본다. 여덟 레지스트리를 함수마다 스냅샷·복원해 두면 각
+    모듈이 저마다 복원 픽스처를 두지 않아도 되고 테스트 순서와도 무관해진다.
+    """
+    saved = {name: registry.snapshot() for name, registry in GROUPS.items()}
+    yield
+    for name, registry in GROUPS.items():
+        registry.restore(saved[name])
 
 
 @pytest.fixture

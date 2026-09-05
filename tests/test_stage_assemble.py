@@ -4,23 +4,10 @@ import json
 import pytest
 
 from persona_sft_data.core.config import PipelineConfig
-from persona_sft_data.core.registry import STAGES
 from persona_sft_data.core.runner import execute
 from persona_sft_data.core.schema import read_jsonl, write_jsonl
 from persona_sft_data.stages.assemble import AssembleStage
 from tests.conftest import write_config
-
-
-@pytest.fixture(autouse=True)
-def _real_assemble():
-    """test_config.py의 autouse 픽스처가 'assemble' 단계를 ``max_sessions`` 없는 자리 표시로
-    덮어쓴 채 세션 레지스트리에 남긴다. 설정 검증이 진짜 ``AssembleSettings``를 쓰도록 이
-    모듈에서는 내장 구현을 다시 올리고, 끝나면 있던 그대로 되돌린다(test_stage_ingest와 같은 규칙)."""
-    previous = STAGES._items.get("assemble")
-    STAGES.add("assemble", AssembleStage, origin="plugins")
-    yield
-    if previous is not None:
-        STAGES._items["assemble"] = previous
 
 
 def _s(i, source):

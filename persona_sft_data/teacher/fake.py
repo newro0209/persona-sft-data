@@ -17,6 +17,25 @@ from persona_sft_data.teacher.base import Request, Result
 _HANGUL = re.compile(r"[가-힣]")
 _LINES = re.compile(r"길이:.*?(\d+)번")
 
+# 후속 줄에 섞을 짧은 어미들. 모든 세션이 같은 문장을 내면 filter의
+# ``assistant_line_overused``가 코퍼스 대부분을 버려 filter 회귀가 스모크에 안 보인다.
+_MOODS = ("더 하고 싶어", "지금 딱 좋아", "생각하면 기뻐", "너랑 하면 즐거워", "조금만 더 해 줘")
+_ASKS = ("어때?", "지금은 괜찮아?", "더 해 볼까?", "어떤 기분이야?", "같이 할래?")
+# 발화 길이 제약(예: 4~35글자)을 넘지 않도록 상황을 이만큼만 앞에서 쓴다.
+_HEAD_CHARS = 12
+
+
+def _head(situation: str) -> str:
+    """상황을 짧은 머리말로. 낱말 경계에서 자르고, 못 자르면 앞에서 잘라 쓴다."""
+    if len(situation) <= _HEAD_CHARS:
+        return situation
+    words: list[str] = []
+    for word in situation.split():
+        if len(" ".join([*words, word])) > _HEAD_CHARS:
+            break
+        words.append(word)
+    return " ".join(words) if words else situation[:_HEAD_CHARS]
+
 
 class FakeTeacher:
     def __init__(self, replies: dict[str, str] | None = None, *, default: str = "",
@@ -55,10 +74,15 @@ class EchoTeacher:
         m = _LINES.search(req.user)
         if first.startswith("상황:") and m:
             situation = first.split(":", 1)[1].strip()
+            head = _head(situation)
             lines = []
+            # ``U:``/``A:`` 교대, 첫 줄 U, 마지막 줄 A. 줄마다 상황과 발화 순번을 섞어
+            # 같은 문장이 코퍼스를 덮지 않게 한다.
             for i in range(int(m.group(1))):
-                lines.append(f"U: {situation} 어때?" if i == 0 else f"U: 그리고 {situation}은 어때?")
-                lines.append(f"A: 응, {situation} 좋아." if i == 0 else "A: 응, 조금 더 하고 싶어.")
+                ask = _ASKS[(len(situation) + i) % len(_ASKS)]
+                mood = _MOODS[(len(situation) + i) % len(_MOODS)]
+                lines.append(f"U: {head} 어때?" if i == 0 else f"U: 그리고 {head}, {ask}")
+                lines.append(f"A: 응, {head} 좋아." if i == 0 else f"A: {head} 말이야, {mood}.")
             return "\n".join(lines)
         text = req.user.strip().splitlines()[-1] if req.user.strip() else ""
         if not _HANGUL.search(text):

@@ -1,31 +1,12 @@
 """ingest: 소스마다 읽고, 싸게 거르고, 표집하고, 필요하면 번역하고, 주제·안전 필터를 건다."""
 import json
 
-import pytest
-
 from persona_sft_data.core.config import PipelineConfig
-from persona_sft_data.core.registry import STAGES, TRANSLATORS
 from persona_sft_data.core.runner import execute
 from persona_sft_data.core.schema import read_jsonl
-from persona_sft_data.sources.translate import TeacherTranslatorFactory
 from persona_sft_data.stages.ingest import IngestStage
 from persona_sft_data.teacher.fake import FakeTeacher
 from tests.conftest import FIXTURES, write_config
-
-
-@pytest.fixture(autouse=True)
-def _real_plugins():
-    """test_config.py의 autouse 픽스처가 'ingest' 단계와 'teacher' 번역기를 자리 표시로 덮어쓴 채
-    세션 레지스트리에 남긴다. 설정 검증이 진짜 ``IngestSettings``를 쓰고 번역이 실제로 돌도록
-    이 모듈에서는 내장 구현을 다시 올리고, 끝나면 있던 그대로 되돌린다."""
-    targets = ((STAGES, "ingest", IngestStage), (TRANSLATORS, "teacher", TeacherTranslatorFactory))
-    saved = [(registry, name, registry._items.get(name)) for registry, name, _ in targets]
-    for registry, name, real in targets:
-        registry.add(name, real, origin="plugins")
-    yield
-    for registry, name, previous in saved:
-        if previous is not None:
-            registry._items[name] = previous
 
 
 def _sources():

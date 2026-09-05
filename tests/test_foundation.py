@@ -3,30 +3,11 @@ import ast
 import re
 from pathlib import Path
 
-import pytest
-
 from persona_sft_data.core.persona import load
-from persona_sft_data.core.registry import STAGES
-from persona_sft_data.stages.assemble import AssembleStage
-from persona_sft_data.stages.ingest import IngestStage
 from tests.conftest import DOC, ROOT
 
 PKG = ROOT / "persona_sft_data"
 
-
-@pytest.fixture(autouse=True)
-def _real_stages():
-    """test_config.py의 autouse 픽스처가 'ingest'·'assemble' 단계를 자리 표시로 덮어쓴 채 세션
-    레지스트리에 남긴다. 저장소 설정 두 벌이 진짜 ``IngestSettings``·``AssembleSettings``로
-    검증되도록 이 모듈에서는 내장 구현을 다시 올리고, 끝나면 있던 그대로 되돌린다."""
-    targets = (("ingest", IngestStage), ("assemble", AssembleStage))
-    saved = [(name, STAGES._items.get(name)) for name, _ in targets]
-    for name, real in targets:
-        STAGES.add(name, real, origin="plugins")
-    yield
-    for name, previous in saved:
-        if previous is not None:
-            STAGES._items[name] = previous
 MODEL_ID = re.compile(r"(?:hf\.co/|kakaocorp/|LGAI-|NotoriousH2/|Qwen)")
 DATA_PREFIX = re.compile(r"^data[/\\]")
 URL = re.compile(r"^https?://")

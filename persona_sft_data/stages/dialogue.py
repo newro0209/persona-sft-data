@@ -8,14 +8,27 @@ beat 목록은 표집하지 않고 전부 돈다 — 문서가 이름 붙인 상
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from persona_sft_data.core.config import ConfigError
 from persona_sft_data.core.registry import STAGES, TEACHERS
 from persona_sft_data.core.runner import StageContext, metric
 from persona_sft_data.teacher import prompts
 from persona_sft_data.teacher.base import Request, batched
+
+
+def _positive(where: str, value: Any) -> int:
+    """설정 값을 1 이상의 정수로. 어긋나면 ``ConfigError``다 — 맨 ``ValueError``는
+    CLI가 잡지 않아 사용자가 트레이스백을 본다."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"{where}는 정수여야 한다: {value!r}") from None
+    if number < 1:
+        raise ConfigError(f"{where}는 1 이상이어야 한다: {value!r}")
+    return number
 
 
 @dataclass(frozen=True)
@@ -23,6 +36,21 @@ class DialogueSettings:
     teacher: str
     per_situation: int = 40
     turns: tuple[int, ...] | None = None
+
+    def __post_init__(self) -> None:
+        """값도 로드 시점에 본다. 실행 중에 터지면 교사 예산을 이미 다 쓴 뒤다.
+
+        frozen dataclass라 고쳐 담지는 않고 검증만 한다.
+        """
+        _positive("stages.dialogue.per_situation", self.per_situation)
+        if self.turns is None:
+            return
+        if isinstance(self.turns, (str, bytes)) or not isinstance(self.turns, Sequence):
+            raise ConfigError(f"stages.dialogue.turns는 정수 목록이어야 한다: {self.turns!r}")
+        if not self.turns:
+            raise ConfigError("stages.dialogue.turns가 비어 있다 (프로필 기본값을 쓰려면 키를 빼라)")
+        for turn in self.turns:
+            _positive("stages.dialogue.turns의 각 항목", turn)
 
 
 @STAGES.register("dialogue", origin="builtin")
@@ -61,8 +89,9 @@ class DialogueStage:
         per_situation = int(ctx.settings.per_situation)
         turn_choices = list(ctx.settings.turns or ctx.profile.default_turns)
         flows = list(ctx.persona.flows or ctx.profile.default_flows)
+        # per_situation·turns는 설정이 이미 검증했다. 남은 것은 문서·프로필에서 오는 것들이다.
         if not beats or per_situation < 1 or not turn_choices or not flows:
-            raise ValueError(f"stage {ctx.name!r}: beat·per_situation·turns·flows 중 빈 것이 있다")
+            raise ConfigError(f"stage {ctx.name!r}: beat·per_situation·turns·flows 중 빈 것이 있다")
 
         batch_size = max(1, int(cfg.concurrency))
         total = len(beats) * per_situation

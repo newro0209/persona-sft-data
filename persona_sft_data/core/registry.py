@@ -15,9 +15,11 @@
 from __future__ import annotations
 
 import importlib
+import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from importlib import metadata
+from pathlib import Path
 from typing import Any, Generic, TypeVar
 
 T = TypeVar("T")
@@ -122,17 +124,53 @@ class Registry(Generic[T]):
         self._discover()
         return [self._items[name] for name in sorted(self._items)]
 
+    # -- 스냅샷 -------------------------------------------------------------
 
-def load_plugins(modules: Iterable[str]) -> list[str]:
-    """설정의 ``plugins`` 목록을 import 한다. 모듈은 import 되면서 자신을 등록한다."""
-    loaded: list[str] = []
-    for module in modules:
-        try:
-            importlib.import_module(module)
-        except ImportError as exc:
-            raise PluginError(f"plugins 모듈 {module!r}을(를) import 하지 못했다: {exc}") from exc
-        loaded.append(module)
-    return loaded
+    def snapshot(self) -> dict[str, Any]:
+        """지금 등록된 것의 사본. ``restore``와 짝이고, 테스트 격리에 쓴다.
+
+        먼저 지연 발견을 끝낸다. 발견 전 상태를 담으면 ``restore`` 뒤의 재발견이
+        이미 import 된 내장 모듈을 다시 import 해도 데코레이터가 돌지 않아 내장이
+        영구히 사라진다.
+        """
+        self._discover()
+        return {"items": dict(self._items), "discovered": self._discovered}
+
+    def restore(self, snapshot: dict[str, Any]) -> None:
+        """``snapshot()``을 찍은 시점으로 되돌린다. 그 뒤 등록된 것은 사라진다."""
+        self._items = dict(snapshot["items"])
+        self._discovered = bool(snapshot["discovered"])
+
+
+def load_plugins(modules: Iterable[str], *, search_path: str | Path | None = None) -> list[str]:
+    """설정의 ``plugins`` 목록을 import 한다. 모듈은 import 되면서 자신을 등록한다.
+
+    ``search_path``가 주어지면 import 하는 동안만 ``sys.path`` 앞에 넣고 끝나면
+    빼낸다 — 저장소에 둔 로컬 모듈은 콘솔 스크립트(``sys.path``에 저장소가 아니라
+    ``.venv/Scripts``가 들어간다)에서도 붙어야 한다.
+    """
+    modules = list(modules)
+    if not modules:
+        return []
+    entry = str(Path(search_path).resolve()) if search_path is not None else None
+    added = entry is not None and entry not in sys.path
+    if added:
+        sys.path.insert(0, entry)
+    try:
+        loaded: list[str] = []
+        for module in modules:
+            try:
+                importlib.import_module(module)
+            except Exception as exc:  # noqa: BLE001 - 구문 오류든 이름 오류든 같은 안내
+                raise PluginError(
+                    f"plugins 모듈 {module!r}을(를) import 하지 못했다: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+            loaded.append(module)
+        return loaded
+    finally:
+        if added and entry in sys.path:
+            sys.path.remove(entry)
 
 
 STAGES: Registry = Registry("persona_sft_data.stages")

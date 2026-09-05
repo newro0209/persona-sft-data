@@ -92,6 +92,92 @@ def test_load_plugins_reports_the_module_it_could_not_import():
         load_plugins(["no_such_module_xyz"])
 
 
+def test_load_plugins_finds_a_local_module_under_search_path_only(tmp_path):
+    """콘솔 스크립트의 sys.path에는 저장소가 아니라 .venv/Scripts가 들어간다.
+
+    ``search_path``가 import 하는 동안만 저장소를 넣어야 로컬 플러그인이 붙는다.
+    """
+    (tmp_path / "path_plugin.py").write_text(textwrap.dedent("""
+        from persona_sft_data.core.registry import FORMATS
+        @FORMATS.register("path_format")
+        class PathFormat:
+            name = "path_format"
+            extensions = (".txt",)
+            def rows(self, data, fields):
+                return iter(())
+    """), encoding="utf-8")
+    assert str(tmp_path) not in sys.path
+    with pytest.raises(PluginError, match="path_plugin"):
+        load_plugins(["path_plugin"])                      # sys.path에 없으면 못 찾는다
+    try:
+        assert load_plugins(["path_plugin"], search_path=tmp_path) == ["path_plugin"]
+        assert reg.FORMATS.get("path_format").name == "path_format"
+        assert str(tmp_path.resolve()) not in sys.path      # 끝나면 원상 복구
+    finally:
+        sys.modules.pop("path_plugin", None)
+
+
+def test_load_plugins_wraps_failures_that_are_not_importerror(tmp_path):
+    """구문 오류·이름 오류가 그대로 전파되면 사용자가 한 줄 안내 대신 트레이스백을 본다."""
+    (tmp_path / "broken_plugin.py").write_text("def broken(:\n    pass\n", encoding="utf-8")
+    (tmp_path / "naming_plugin.py").write_text("undefined_name\n", encoding="utf-8")
+    with pytest.raises(PluginError, match="broken_plugin.*SyntaxError"):
+        load_plugins(["broken_plugin"], search_path=tmp_path)
+    with pytest.raises(PluginError, match="naming_plugin.*NameError"):
+        load_plugins(["naming_plugin"], search_path=tmp_path)
+
+
+def test_snapshot_and_restore_undo_later_registrations():
+    r: Registry[str] = Registry("test.group")
+    r.add("kept", "before", origin="builtin")
+    saved = r.snapshot()
+    r.add("kept", "after", origin="plugins")
+    r.add("added", "later", origin="plugins")
+    assert r.get("kept") == "after" and r.names() == ["added", "kept"]
+    r.restore(saved)
+    assert r.get("kept") == "before" and r.names() == ["kept"]
+    r.restore(saved)                                        # 여러 번 되돌려도 같다
+    assert r.names() == ["kept"]
+
+
+def test_snapshot_discovers_first_so_restore_cannot_lose_what_loads_once(monkeypatch):
+    """``builtins.load()``는 한 번만 돈다.
+
+    발견 전 상태를 담아 되돌리면 재발견이 이미 import 된 모듈을 다시 import 해도
+    데코레이터가 돌지 않아 내장이 영구히 사라진다. ``snapshot()``이 먼저 발견한다.
+    """
+    loads = []
+
+    class FakeEP:
+        name = "discovered"
+        value = "somewhere:Thing"
+        def load(self):
+            loads.append(1)
+            return f"loaded-{len(loads)}"
+
+    monkeypatch.setattr(reg.metadata, "entry_points", lambda group: [FakeEP()] if group == "test.group" else [])
+    r: Registry[str] = Registry("test.group")
+    saved = r.snapshot()
+    r.add("temporary", "x", origin="plugins")
+    r.restore(saved)
+    assert r.get("discovered") == "loaded-1" and loads == [1]
+    assert "temporary" not in r.names()
+
+
+def test_registries_are_isolated_between_test_functions():
+    """conftest의 autouse 픽스처가 함수마다 여덟 레지스트리를 되돌린다.
+
+    다른 모듈(test_config.py)이 'ingest'·'assemble'·'gen'을 자리 표시로 등록해도
+    그 함수 밖으로는 새지 않으므로 여기서는 내장이 보인다 — 테스트 순서와 무관하다.
+    """
+    from persona_sft_data.stages.assemble import AssembleStage
+    from persona_sft_data.stages.ingest import IngestStage
+
+    assert type(reg.STAGES.get("ingest")) is IngestStage
+    assert type(reg.STAGES.get("assemble")) is AssembleStage
+    assert "gen" not in reg.STAGES.names()
+
+
 def test_pyproject_declares_every_builtin_as_an_entry_point():
     """내장도 entry point로 선언돼야 `plugins` 표가 내장과 외부를 같은 방식으로 보여 준다."""
     import tomllib

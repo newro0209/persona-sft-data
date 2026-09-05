@@ -1,10 +1,12 @@
 """설정: 단일 출처, 단계 설정은 플러그인의 dataclass로 검증, 참조는 전부 존재해야 한다."""
+import sys
+import textwrap
 from dataclasses import dataclass
 
 import pytest
 
 from persona_sft_data.core.config import ConfigError, PipelineConfig, TeacherConfig, build_settings
-from persona_sft_data.core.registry import STAGES, TEACHERS, TRANSLATORS
+from persona_sft_data.core.registry import FORMATS, STAGES, TEACHERS, TRANSLATORS
 from tests.conftest import write_config
 
 
@@ -57,6 +59,7 @@ class FakeTranslatorFactory:
 
 @pytest.fixture(autouse=True)
 def _plugins():
+    """이 모듈의 자리 표시 등록. conftest의 격리 픽스처가 함수 끝에 되돌린다."""
     STAGES.add("gen", GenStage, origin="plugins")
     STAGES.add("ingest", IngestLike, origin="plugins")
     STAGES.add("assemble", MixStage, origin="plugins")
@@ -169,6 +172,63 @@ def test_stage_seeds_are_deterministic_and_distinct(tmp_path):
     cfg = PipelineConfig.load(write_config(tmp_path))
     assert cfg.stage_seed("gen") != cfg.stage_seed("ingest")
     assert cfg.stage_seed("gen") == PipelineConfig.load(cfg.path).stage_seed("gen")
+
+
+def test_local_plugins_load_from_the_config_root(tmp_path):
+    """저장소에 둔 모듈은 sys.path에 없어도 붙는다 — 로드가 설정의 root를 넘긴다."""
+    (tmp_path / "root_plugin.py").write_text(textwrap.dedent("""
+        from persona_sft_data.core.registry import FORMATS
+        @FORMATS.register("root_format")
+        class RootFormat:
+            name = "root_format"
+            extensions = (".txt",)
+            def rows(self, data, fields):
+                return iter(())
+    """), encoding="utf-8")
+    assert str(tmp_path) not in sys.path
+    try:
+        cfg = PipelineConfig.load(write_config(tmp_path, plugins=["root_plugin"]))
+        assert cfg.plugins == ("root_plugin",)
+        assert FORMATS.get("root_format").name == "root_format"
+    finally:
+        sys.modules.pop("root_plugin", None)
+
+
+def test_a_plugin_module_that_does_not_import_is_a_config_error(tmp_path):
+    """ImportError만 잡으면 구문 오류가 트레이스백으로 새어 나간다."""
+    (tmp_path / "broken.py").write_text("def broken(:\n    pass\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="broken.*SyntaxError"):
+        PipelineConfig.load(write_config(tmp_path, plugins=["broken"]))
+    with pytest.raises(ConfigError, match="ghost_module"):
+        PipelineConfig.load(write_config(tmp_path, plugins=["ghost_module"]))
+
+
+def test_recipe_is_validated_at_load_time(tmp_path):
+    """실행 시점까지 미루면 ``check``가 설정 오류(2)가 아니라 단계 실패(1)로 끝나고,
+    ``run``은 교사 단계를 전부 돌린 뒤 내보내기에서 터진다."""
+    def export(recipe):
+        return write_config(tmp_path, stages={"export": {"name": "d", "recipe": recipe}})
+
+    ok = PipelineConfig.load(export({"kind": "llamafactory", "lora_rank": 8}))
+    assert ok.stage_settings("export").recipe["kind"] == "llamafactory"
+    with pytest.raises(ConfigError, match=r"stages\.export\.recipe.*nope"):
+        PipelineConfig.load(export({"kind": "llamafactory", "nope": 1}))
+    with pytest.raises(ConfigError, match=r"stages\.export\.recipe.*'ghost'"):
+        PipelineConfig.load(export({"kind": "ghost"}))
+    with pytest.raises(ConfigError, match=r"stages\.export\.recipe\.kind"):
+        PipelineConfig.load(export({}))
+    with pytest.raises(ConfigError, match=r"stages\.export\.recipe"):
+        PipelineConfig.load(export("llamafactory"))          # dict가 아니면 설정 오류다
+
+
+def test_source_extract_settings_are_validated_at_load_time(tmp_path):
+    base = {"format": "tsv", "path": "x.tsv", "fields": ["a"], "language": "ko", "license": "mit"}
+    ok = PipelineConfig.load(write_config(tmp_path, sources={"s": {**base, "extract": {"kind": "regex", "pattern": "x"}}}))
+    assert ok.source("s").extract == {"pattern": "x"}
+    with pytest.raises(ConfigError, match="source 's' extract.*nope"):
+        PipelineConfig.load(write_config(tmp_path, sources={"s": {**base, "extract": {"kind": "regex", "pattern": "x", "nope": 1}}}))
+    with pytest.raises(ConfigError, match="source 's' extract.*pattern"):
+        PipelineConfig.load(write_config(tmp_path, sources={"s": {**base, "extract": {"kind": "regex"}}}))
 
 
 def test_build_settings_reports_where():

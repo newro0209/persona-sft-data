@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from persona_sft_data.core.registry import (
     EXTRACTORS,
     FORMATS,
     PROFILES,
+    RECIPES,
     STAGES,
     TEACHERS,
     TRANSLATORS,
@@ -46,6 +48,26 @@ def build_settings(settings_type: type, raw: dict[str, Any], where: str) -> Any:
     if missing:
         raise ConfigError(f"{where}: 필수 키가 없다 {missing}")
     return settings_type(**raw)
+
+
+def _validate_recipe(stage_name: str, raw: dict[str, Any] | None) -> None:
+    """단계 설정의 ``recipe``를 로드 시점에 검증한다.
+
+    실행 시점에만 보면 ``run``이 교사 단계를 다 돌린 뒤(실제 교사면 수천 호출)
+    내보내기에서 터지고, ``check``도 설정 오류(2)가 아니라 단계 실패(1)로 끝난다.
+    """
+    where = f"stages.{stage_name}.recipe"
+    if raw is not None and not isinstance(raw, Mapping):
+        raise ConfigError(f"{where}는 kind를 담은 객체여야 한다: {raw!r}")
+    settings = dict(raw or {})
+    kind = settings.pop("kind", None)
+    if not kind:
+        raise ConfigError(f"{where}.kind가 없다")
+    try:
+        recipe = RECIPES.get(str(kind))
+    except PluginError as exc:
+        raise ConfigError(f"{where}: {exc}") from None
+    build_settings(recipe.settings_type, settings, where)
 
 
 @dataclass(frozen=True)
@@ -243,7 +265,8 @@ class PipelineConfig:
                 raise ConfigError(f"설정 {path}에 {key!r}가 없다")
 
         try:
-            plugins = tuple(load_plugins(raw.get("plugins") or []))
+            # 로컬 플러그인은 저장소 루트 기준이다 — 콘솔 스크립트의 sys.path에는 없다.
+            plugins = tuple(load_plugins(raw.get("plugins") or [], search_path=root))
             if raw["profile"] not in PROFILES.names():
                 raise ConfigError(f"profile {raw['profile']!r}은(는) 등록되지 않았다 (있는 것: {PROFILES.names()})")
         except PluginError as exc:
@@ -270,6 +293,11 @@ class PipelineConfig:
                     f"source {s.name!r}의 extract.kind {s.extract_kind!r}은(는) 등록되지 않았다 "
                     f"(있는 것: {EXTRACTORS.names()})"
                 )
+            # 추출 설정도 여기서 검증한다. 읽기 시점에만 보면 모르는 키가 단계 실패(1)로
+            # 나타나 설정 오류(2)와 구분되지 않는다.
+            build_settings(
+                EXTRACTORS.get(s.extract_kind).settings_type, dict(s.extract), f"source {s.name!r} extract"
+            )
 
         stages: dict[str, Any] = {}
         for name, spec in raw["stages"].items():
@@ -293,6 +321,8 @@ class PipelineConfig:
                     raise ConfigError(
                         f"stages.{name}: source {source_name!r}은(는) 정의되지 않았다 (있는 것: {sorted(sources)})"
                     )
+            if hasattr(settings, "recipe"):
+                _validate_recipe(name, settings.recipe)
             stages[name] = settings
 
         return cls(

@@ -1,7 +1,9 @@
 """dialogue: 모든 beat를 빠짐없이 돌고, 교사 출력은 파싱·수선하며, 실패는 센다."""
 import re
 
-from persona_sft_data.core.config import PipelineConfig
+import pytest
+
+from persona_sft_data.core.config import ConfigError, PipelineConfig
 from persona_sft_data.core.persona import load
 from persona_sft_data.core.runner import execute
 from persona_sft_data.core.schema import read_jsonl
@@ -51,6 +53,22 @@ def test_unparseable_and_failed_replies_are_counted(tmp_path):
     fake = FakeTeacher(reply_fn=lambda r: "그냥 산문")
     stats = execute(DialogueStage(teacher=fake), _config(tmp_path), log=lambda m: None)
     assert stats.produced == 0 and stats.reject_reasons["unparseable"] == stats.rejected > 0
+
+
+def test_bad_values_are_config_errors_at_load_time(tmp_path):
+    """값 검증이 실행 시점에 있으면 ``check``는 'dialogue OK'로 통과하고 ``run``이
+    ValueError 트레이스백으로 죽는다 — 설정 오류는 로드에서 잡힌다."""
+    with pytest.raises(ConfigError, match="per_situation"):
+        _config(tmp_path, per_situation=0)
+    with pytest.raises(ConfigError, match="turns가 비어 있다"):
+        _config(tmp_path, turns=[])
+    with pytest.raises(ConfigError, match="turns"):
+        _config(tmp_path, turns=[2, 0])
+    with pytest.raises(ConfigError, match="turns.*정수 목록"):
+        _config(tmp_path, turns=3)
+    with pytest.raises(ConfigError, match="per_situation.*정수"):
+        _config(tmp_path, per_situation="많이")
+    assert _config(tmp_path, per_situation=1, turns=[2]).stage_settings("dialogue").turns == [2]
 
 
 def test_same_seed_same_prompts(tmp_path):

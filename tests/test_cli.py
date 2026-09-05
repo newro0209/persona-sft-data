@@ -1,57 +1,41 @@
 """CLI: 스모크 설정으로 check → run → export가 GPU·네트워크 없이 끝까지 돈다."""
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 from persona_sft_data import cli
 from persona_sft_data.core.config import PipelineConfig
-from persona_sft_data.core.registry import STAGES, TRANSLATORS
-from persona_sft_data.sources.translate import TeacherTranslatorFactory
-from persona_sft_data.stages.assemble import AssembleStage
-from persona_sft_data.stages.dialogue import DialogueStage
-from persona_sft_data.stages.export import ExportStage
-from persona_sft_data.stages.filter import FilterStage
-from persona_sft_data.stages.ingest import IngestStage
-from persona_sft_data.stages.respond import RespondStage
-from tests.conftest import DOC, FIXTURES, ROOT
+from persona_sft_data.sources.translate import TeacherTranslator
+from persona_sft_data.teacher.base import TeacherError
+from persona_sft_data.teacher.fake import EchoTeacher
+from tests.conftest import DOC, ROOT
 
 SMOKE = ROOT / "configs" / "smoke.json"
 
-REAL_PLUGINS = (
-    (STAGES, "ingest", IngestStage), (STAGES, "dialogue", DialogueStage), (STAGES, "respond", RespondStage),
-    (STAGES, "filter", FilterStage), (STAGES, "assemble", AssembleStage), (STAGES, "export", ExportStage),
-    (TRANSLATORS, "teacher", TeacherTranslatorFactory),
-)
 
-
-@pytest.fixture(autouse=True)
-def _real_plugins():
-    """test_config.py의 autouse 픽스처가 'ingest'·'assemble' 단계와 'teacher' 번역기를 자리 표시로
-    덮어쓴 채 세션 레지스트리에 남긴다. CLI 스모크는 진짜 단계 여섯과 번역기로 돌아야 하므로
-    이 모듈에서는 내장 구현을 다시 올리고, 끝나면 있던 그대로 되돌린다(test_stage_ingest와 같은 규칙)."""
-    saved = [(registry, name, registry._items.get(name)) for registry, name, _ in REAL_PLUGINS]
-    for registry, name, real in REAL_PLUGINS:
-        registry.add(name, real, origin="plugins")
-    yield
-    for registry, name, previous in saved:
-        if previous is not None:
-            registry._items[name] = previous
-
-
-@pytest.fixture
-def smoke(tmp_path: Path) -> Path:
-    """저장소의 smoke.json을 임시 프로젝트로 옮긴다: 모든 경로를 절대 경로로."""
+def _smoke_raw(tmp_path: Path) -> dict:
     raw = json.loads(SMOKE.read_text(encoding="utf-8"))
     raw["data_root"] = str(tmp_path / "data")
     raw["datasets_root"] = str(tmp_path / "datasets")
     raw["persona_doc"] = str(DOC)
     for s in raw["sources"].values():
         s["path"] = str(ROOT / s["path"])
-    (tmp_path / "configs").mkdir()
-    path = tmp_path / "configs" / "smoke.json"
+    return raw
+
+
+def _write(tmp_path: Path, raw: dict, name: str = "smoke") -> Path:
+    (tmp_path / "configs").mkdir(exist_ok=True)
+    path = tmp_path / "configs" / f"{name}.json"
     path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
     return path
+
+
+@pytest.fixture
+def smoke(tmp_path: Path) -> Path:
+    """저장소의 smoke.json을 임시 프로젝트로 옮긴다: 모든 경로를 절대 경로로."""
+    return _write(tmp_path, _smoke_raw(tmp_path))
 
 
 def test_check_run_export_end_to_end(smoke, capsys, monkeypatch):
@@ -71,6 +55,13 @@ def test_check_run_export_end_to_end(smoke, capsys, monkeypatch):
     manifest = json.loads((dataset / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["records"] > 0 and manifest["sources"].get("dialogue", 0) > 0
     assert manifest["source_datasets"]["fixture_en"]["original_language"] == "en"
+    # records > 0만 보면 filter가 raw의 거의 전부를 버려도 통과한다. 스모크 교사가 모든
+    # 세션에 같은 후속 줄을 내면 assistant_line_overused가 코퍼스를 삼키므로, filter가
+    # raw의 절반 이상을 남기고 dialogue가 assemble이 원하는 만큼 공급하는지도 본다.
+    corpus = json.loads((cfg.data_root / "final" / "manifest.json").read_text(encoding="utf-8"))
+    raw_produced = corpus["stages"]["raw/dialogue"]["produced"]
+    assert corpus["stages"]["filtered/dialogue"]["produced"] >= raw_produced / 2
+    assert "dialogue" not in corpus["shortfall"]
     assert cli.main(["export", "--config", str(smoke), "--name", "smoke2"]) == 0
     assert (cfg.datasets_root / "smoke2" / "train.jsonl").exists()
 
@@ -107,9 +98,78 @@ def test_init_scaffolds_a_parseable_persona_and_config(tmp_path, monkeypatch):
     assert cli.main(["init", "세라", "--profile", "npc"]) == 2      # 이미 있으면 거부
 
 
+def test_plugins_with_a_config_shows_local_plugins_and_their_origin(tmp_path, capsys):
+    """스펙 §14의 출처 열(내장·entry point·plugins)은 설정을 붙여야 'plugins'까지 보인다."""
+    (tmp_path / "table_plugin.py").write_text(
+        "from persona_sft_data.core.registry import FORMATS\n"
+        "@FORMATS.register('table_format')\n"
+        "class TableFormat:\n"
+        "    name = 'table_format'\n"
+        "    extensions = ('.txt',)\n"
+        "    def rows(self, data, fields):\n"
+        "        return iter(())\n",
+        encoding="utf-8",
+    )
+    raw = _smoke_raw(tmp_path)
+    raw["plugins"] = ["table_plugin"]
+    config = _write(tmp_path, raw, "with_plugin")
+    try:
+        assert cli.main(["plugins", "--config", str(config)]) == 0
+        out = capsys.readouterr().out
+        row = next(line for line in out.splitlines() if "table_format" in line)
+        assert "plugins" in row and "table_plugin:TableFormat" in row
+        assert "builtin" in out                                # 내장은 여전히 builtin이다
+        assert cli.main(["plugins"]) == 0                      # --config는 선택이다
+    finally:
+        sys.modules.pop("table_plugin", None)
+
+
+def test_sources_translate_stops_when_the_teacher_is_unreachable(smoke, capsys, monkeypatch):
+    """번역 전후를 보러 온 명령이 서버가 죽은 줄도 모르고 종료 0으로 끝나면 안 된다."""
+    def dead(self):
+        raise TeacherError("교사 'bulk': 닿지 못했다")
+    monkeypatch.setattr(EchoTeacher, "check", dead)
+    assert cli.main(["sources", "--config", str(smoke), "--sample", "1", "--translate"]) == 1
+    assert "교사 오류" in capsys.readouterr().err
+
+
+def test_sources_marks_individual_translation_failures(smoke, capsys, monkeypatch):
+    monkeypatch.setattr(TeacherTranslator, "translate", lambda self, texts, source_language: [None] * len(texts))
+    assert cli.main(["sources", "--config", str(smoke), "--sample", "1", "--translate"]) == 0
+    assert "(번역 실패)" in capsys.readouterr().out
+
+
 def test_bad_config_exits_2(tmp_path, capsys):
     (tmp_path / "configs").mkdir()
     bad = tmp_path / "configs" / "bad.json"
     bad.write_text("{}", encoding="utf-8")
     assert cli.main(["check", "--config", str(bad)]) == 2
     assert "profile" in capsys.readouterr().err
+
+
+def test_recipe_extract_and_stage_values_exit_2_before_any_teacher_call(tmp_path, capsys):
+    """실행 시점 검증이면 ``check``는 단계 실패(1)로, ``run``은 교사를 다 쓴 뒤 터진다."""
+    broken = {
+        "bad_recipe": lambda raw: raw["stages"]["export"]["recipe"].update({"nope": 1}),
+        "bad_extract": lambda raw: raw["sources"]["fixture_ko"].setdefault("extract", {}).update({"nope": 1}),
+        "bad_dialogue": lambda raw: raw["stages"]["dialogue"].update({"per_situation": 0}),
+    }
+    for name, break_it in broken.items():
+        raw = _smoke_raw(tmp_path)
+        break_it(raw)
+        config = _write(tmp_path, raw, name)
+        assert cli.main(["check", "--config", str(config)]) == 2, name
+        assert "설정 오류" in capsys.readouterr().err, name
+        assert cli.main(["run", "--config", str(config), "--stage", "dialogue"]) == 2, name
+        assert not (tmp_path / "data" / "raw").exists(), name
+
+
+def test_a_plugin_module_that_cannot_be_imported_exits_2(tmp_path, capsys):
+    """구문 오류가 트레이스백으로 새면 사용자가 '설정 오류' 한 줄을 못 본다."""
+    (tmp_path / "broken_plugin.py").write_text("def broken(:\n    pass\n", encoding="utf-8")
+    raw = _smoke_raw(tmp_path)
+    raw["plugins"] = ["broken_plugin"]
+    config = _write(tmp_path, raw, "broken")
+    assert cli.main(["check", "--config", str(config)]) == 2
+    err = capsys.readouterr().err
+    assert "설정 오류" in err and "SyntaxError" in err
