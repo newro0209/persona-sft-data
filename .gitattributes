@@ -1,0 +1,8 @@
+# Shell scripts must keep LF. Git's autocrlf would hand a WSL/Linux runner a
+# CRLF copy, which dies on the first line of the body with
+# "set: pipefail: invalid option name" -- the exact trap
+# docs/wsl-vllm.md warns about.
+*.sh text eol=lf
+
+# Same reasoning for anything else read by a POSIX interpreter.
+*.bash text eol=lf
