@@ -18,6 +18,9 @@ BUILTIN_MODULES: tuple[str, ...] = (
     "persona_sft_data.sources.formats",
     "persona_sft_data.sources.extractors",
     "persona_sft_data.sources.translate",
+    "persona_sft_data.stages.ingest",
+    "persona_sft_data.stages.dialogue",
+    "persona_sft_data.stages.respond",
 )
 
 _loaded = False

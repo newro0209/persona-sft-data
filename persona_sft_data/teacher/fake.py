@@ -26,9 +26,10 @@ class FakeTeacher:
         self.default = default
         self.reply_fn = reply_fn
         self.seen: list[Request] = []
+        self.checked = False  # 단계가 생성 전에 check()를 불렀는지 테스트가 본다
 
     def check(self) -> None:
-        return None
+        self.checked = True
 
     def generate(self, requests: Sequence[Request]) -> list[Result]:
         out = []

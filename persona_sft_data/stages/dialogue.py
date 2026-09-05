@@ -1,0 +1,111 @@
+"""dialogue: 추론 교사가 다룰 상황의 beat마다 대화를 쓴다.
+
+beat 목록은 표집하지 않고 전부 돈다 — 문서가 이름 붙인 상황이 코퍼스에 없으면
+아래 어느 단계도 메울 수 없다. 흐름은 문서의 대화 흐름(없으면 프로필 기본값)에서,
+턴 수는 설정(없으면 프로필 기본값)에서 뽑는다. 이 모듈에는 한국어 산문이 없다.
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import Iterator
+from dataclasses import dataclass
+from typing import Any
+
+from persona_sft_data.core.registry import STAGES, TEACHERS
+from persona_sft_data.core.runner import StageContext, metric
+from persona_sft_data.teacher import prompts
+from persona_sft_data.teacher.base import Request, batched
+
+
+@dataclass(frozen=True)
+class DialogueSettings:
+    teacher: str
+    per_situation: int = 40
+    turns: tuple[int, ...] | None = None
+
+
+@STAGES.register("dialogue", origin="builtin")
+class DialogueStage:
+    name = "dialogue"
+    config_name = "dialogue"
+    mode = "records"
+    record_kind = "session"
+    produces = "raw"
+    settings_type = DialogueSettings
+
+    def __init__(self, teacher: Any = None) -> None:
+        self._teacher = teacher
+
+    def requires(self, config: Any) -> tuple[str, ...]:
+        return ()
+
+    def instances(self, config: Any) -> list[Any]:
+        return [self]
+
+    def _teacher_for(self, ctx: StageContext) -> Any:
+        if self._teacher is not None:
+            return self._teacher
+        cfg = ctx.config.teacher_for(ctx.name)
+        return TEACHERS.get(cfg.kind).build(cfg)
+
+    def preflight(self, ctx: StageContext) -> None:
+        self._teacher_for(ctx).check()
+
+    def run(self, ctx: StageContext) -> Iterator[dict[str, Any]]:
+        cfg = ctx.config.teacher_for(ctx.name)
+        teacher = self._teacher_for(ctx)
+        teacher.check()  # 다른 모델이 떠 있으면 생성 전에 멈춘다
+
+        beats = ctx.persona.beats
+        per_situation = int(ctx.settings.per_situation)
+        turn_choices = list(ctx.settings.turns or ctx.profile.default_turns)
+        flows = list(ctx.persona.flows or ctx.profile.default_flows)
+        if not beats or per_situation < 1 or not turn_choices or not flows:
+            raise ValueError(f"stage {ctx.name!r}: beat·per_situation·turns·flows 중 빈 것이 있다")
+
+        batch_size = max(1, int(cfg.concurrency))
+        total = len(beats) * per_situation
+        index = issued = 0
+        started = time.time()
+        for batch in batched(self._requests(ctx, per_situation, turn_choices, flows), batch_size):
+            results = {r.key: r for r in teacher.generate([req for req, _ in batch])}
+            failures = tokens = 0
+            reasons: dict[str, int] = {}
+            for request, beat_index in batch:
+                result = results.get(request.key)
+                if result is None or not result.ok:
+                    failures += 1
+                    reasons["teacher_error"] = reasons.get("teacher_error", 0) + 1
+                    continue
+                tokens += result.completion_tokens
+                turns = prompts.repair_dialogue(prompts.parse_dialogue(result.text or ""))
+                if not turns:
+                    reasons["unparseable"] = reasons.get("unparseable", 0) + 1
+                    continue
+                yield {
+                    "id": f"dialogue-{index:06d}", "source": "dialogue", "scenario": beats[beat_index],
+                    "generator": [cfg.model], "license": "synthetic", "turns": turns,
+                }
+                index += 1
+            yield metric(calls=len(batch), failures=failures, completion_tokens=tokens,
+                         rejected=sum(reasons.values()), reject_reasons=reasons)
+            issued += len(batch)
+            ctx.log(f"[{ctx.name}] beats {batch[-1][1] + 1}/{len(beats)} | {index:,} records | "
+                    f"{issued:,}/{total:,} calls | {time.time() - started:.0f}s")
+
+    def _requests(self, ctx: StageContext, per_situation: int, turn_choices: list[int],
+                  flows: list[str]) -> Iterator[tuple[Request, int]]:
+        """요청은 지연 생성. 한 번에 한 배치만 메모리에 있다."""
+        for beat_index, beat in enumerate(ctx.persona.beats):
+            for n in range(per_situation):
+                turns = ctx.rng.choice(turn_choices)
+                flow = ctx.rng.choice(flows)
+                yield (
+                    Request(
+                        key=f"{beat_index}:{n}",
+                        system=prompts.dialogue_system(ctx.persona, ctx.profile, ctx.rng),
+                        user=prompts.dialogue_user(ctx.persona, ctx.profile, beat, flow, turns),
+                    ),
+                    beat_index,
+                )
