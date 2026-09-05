@@ -85,8 +85,10 @@ personas/<이름>.md ─ dialogue(추론 교사가 상황·흐름별 대화 작�
 llamafactory-cli train datasets/<name>/recipe/llamafactory/lora_sft.yaml
 ```
 
-기본 학생은 `kakaocorp/kanana-2-1.3b-base`다. base 모델에는 채팅 템플릿이 없어 이
-프로젝트가 ChatML을 정하며, 추론 때도 `chat_template.jinja`를 써야 한다.
+학생 모델은 기본값이 없는 필수 설정이다(`student.model`). 이 저장소의 설정
+(`configs/mongle.json`·`configs/smoke.json`)이 겨냥하는 학생은
+`kakaocorp/kanana-2-1.3b-base`이고, 그 문자열은 설정에만 있다. base 모델에는 채팅
+템플릿이 없어 이 프로젝트가 ChatML을 정하며, 추론 때도 `chat_template.jinja`를 써야 한다.
 
 ## 플러그인
 

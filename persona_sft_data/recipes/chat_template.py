@@ -3,6 +3,14 @@
 jinja 텍스트는 트레이너용이고, 파이썬 렌더러는 표본 파일과 길이 측정용이다. 둘은
 같은 바이트를 내야 하며 테스트가 그것을 확인한다. jinja의 generation 마커는 TRL의
 assistant_only_loss가 마스크를 만들 때 쓴다.
+
+**개행은 블록 태그 뒤가 아니라 앞에 둔다.** 트레이너가 어떤 jinja 환경으로 이
+텍스트를 컴파일할지 우리가 정하지 못한다. ``trim_blocks=True``면 블록 태그 바로
+뒤의 개행이 사라지므로 ``<|im_end|>{% endgeneration %}\\n``은 환경에 따라 다른
+바이트를 낸다 — assistant 턴 뒤 개행이 없어져 ``<|im_end|>``와 다음
+``<|im_start|>``가 붙는다. 개행을 ``{% endgeneration %}`` 앞의 리터럴로 옮기고 뒤에
+남는 공백은 ``{%- else`` 로 걷어 내 기본 환경과 ``trim_blocks``/``lstrip_blocks``
+환경이 같은 바이트를 내게 한다. 테스트가 두 환경 모두를 대조한다.
 """
 
 from __future__ import annotations
@@ -13,8 +21,8 @@ CHATML_JINJA = (
     "{%- for message in messages -%}\n"
     "{%- if message['role'] == 'assistant' -%}\n"
     "<|im_start|>assistant\n"
-    "{% generation %}{{ message['content'] }}<|im_end|>{% endgeneration %}\n"
-    "{% else -%}\n"
+    "{% generation %}{{ message['content'] }}<|im_end|>\n{% endgeneration %}\n"
+    "{%- else -%}\n"
     "<|im_start|>{{ message['role'] }}\n"
     "{{ message['content'] }}<|im_end|>\n"
     "{% endif -%}\n"

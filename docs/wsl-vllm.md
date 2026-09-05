@@ -10,7 +10,8 @@
 헛돌았다.
 
 파이프라인은 이 서버를 **띄우지 않는다.** 사람이 띄우고, 파이프라인은
-`http://localhost:8000/v1`에 HTTP로 붙을 뿐이다(설계 §3.2).
+`http://localhost:8000/v1`에 HTTP로 붙을 뿐이다
+(`docs/superpowers/specs/2026-09-05-peft-persona-toolkit-design.md` §3 범위 밖).
 
 ## 1. 한 줄 설치
 
@@ -24,8 +25,15 @@ MSYS_NO_PATHCONV=1 wsl.exe bash -lc   'bash /mnt/c/Users/newro/projects/persona-
 
 ```bash
 source ~/vllm-teacher-env.sh
-vllm serve <model> --port 8000 --max-model-len 4096     --gpu-memory-utilization 0.90 --served-model-name teacher
+vllm serve <model> --port 8000 --max-model-len 4096     --gpu-memory-utilization 0.90
 ```
+
+**`--served-model-name`을 주지 마라.** 파이프라인의 `check`는 `/v1/models`의 목록에
+설정에 적힌 **모델 id 전체**가 있어야 통과한다
+(`teacher/openai_compat.py`의 `OpenAICompatTeacher.check()`). 별칭으로 띄우면
+`/v1/models`가 그 별칭만 돌려주므로 `check`도 `run`도 "이 단계가 필요로 하는 모델로
+서버를 다시 띄워라"로 멈춘다. `configs/mongle.json`과 `setup/overnight.sh`는 둘 다
+전체 id를 쓴다.
 
 ## 2. 이 기계에서 명령을 실행할 때의 함정
 
@@ -149,8 +157,8 @@ mirrored에서 vLLM만 안 되는 증상은 진단하기 나쁜 모양이다. `s
 **따라서 단계별로 모드를 바꾼다.**
 
 ```powershell
-tools\setup\wsl_net_mode.ps1 mirrored   # pip install, hf download 전에
-tools\setup\wsl_net_mode.ps1 nat        # vllm serve 전에
+setup\wsl_net_mode.ps1 mirrored   # pip install, hf download 전에
+setup\wsl_net_mode.ps1 nat        # vllm serve 전에
 ```
 
 각 전환은 `wsl --shutdown`을 동반하므로 WSL에서 돌던 것이 전부 죽는다. 모델을
@@ -240,16 +248,19 @@ python -c "import torch; print('sm_120' in torch.cuda.get_arch_list())"
 어차피 순차라 얻을 것이 없다.
 
 ```bash
-# 시드·추론 (seed 단계) -- 적재 실측 15.92 GiB
+# 추론 교사 (dialogue 단계) -- 적재 실측 15.92 GiB
 vllm serve NotoriousH2/kanana-2-30b-a3b-instruct-2601-awq-w4a16 \
     --port 8000 --max-model-len 4096 \
-    --gpu-memory-utilization 0.90 --served-model-name teacher
+    --gpu-memory-utilization 0.90
 
-# 대량 대화 (expand·real 단계)
+# 대량 교사 (ingest 번역·respond 단계)
 vllm serve kakaocorp/kanana-2-3b-instruct \
     --port 8000 --max-model-len 4096 \
-    --gpu-memory-utilization 0.90 --served-model-name teacher
+    --gpu-memory-utilization 0.90
 ```
+
+`setup/overnight.sh`가 두 명령을 이 순서로 자동으로 돌린다. 손으로 띄울 때도
+**모델 별칭(`--served-model-name`)을 붙이지 않는다** — §1의 이유.
 
 `--max-model-len`을 모델 최대치(32768)가 아니라 4096으로 낮추는 것은 의도된
 선택이다. 이 파이프라인의 프롬프트는 짧고, 줄인 만큼 KV 캐시가 커져 배치가

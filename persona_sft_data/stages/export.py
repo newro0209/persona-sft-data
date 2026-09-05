@@ -155,8 +155,14 @@ class ExportStage:
                     if chat.get("source_dataset"):
                         entry = source_datasets.setdefault(chat["source_dataset"], {
                             "url": chat.get("source_url"), "original_language": chat.get("original_language"),
+                            "translator": chat.get("translator"),
                             "license": str(chat.get("license", "")), "records": 0})
                         entry["records"] += 1
+                        # 같은 소스에 번역된 것과 안 된 것이 섞이면 첫 레코드에 번역 정보가 없을 수
+                        # 있다. 뒤에 나오는 레코드에서 빈 자리를 채운다.
+                        for key in ("original_language", "translator"):
+                            if not entry.get(key) and chat.get(key):
+                                entry[key] = chat[key]
                     turns_total += len(chat["messages"]) - 1
                     text = render(chat["messages"])
                     rendered.append(text)
@@ -175,7 +181,7 @@ class ExportStage:
         manifest: dict[str, Any] = {
             "name": name, "format": "openai-messages", "generated_by": "persona_sft_data",
             "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "persona": ctx.persona.name, "profile": ctx.config.profile,
+            "persona": ctx.persona.name, "profile": ctx.config.profile, "language": ctx.config.language,
             "persona_doc": _describe(ctx.config.persona_doc, ctx.config.root),
             "persona_sha256": sha256_of(ctx.config.persona_doc),
             "config_path": _describe(ctx.config.path, ctx.config.root), "seed": ctx.config.seed,
@@ -211,13 +217,20 @@ class ExportStage:
 
 
 def dataset_card(manifest: Mapping[str, Any], system_prompt: str) -> str:
-    """Hugging Face 데이터 카드(YAML 머리말 + 마크다운). manifest만 보고 만든다."""
+    """Hugging Face 데이터 카드(YAML 머리말 + 마크다운). manifest만 보고 만든다.
+
+    머리말의 ``language``와 언어 태그는 설정의 ``language``(manifest에 실려 온다)에서
+    만든다 — 코드가 언어를 정하지 않는다.
+    """
     records = manifest["records"]
     size_bucket = next(label for bound, label in ((1_000, "n<1K"), (10_000, "1K<n<10K"), (100_000, "10K<n<100K"),
                                                   (1_000_000, "100K<n<1M"), (float("inf"), "1M<n<10M")) if records < bound)
     all_licenses = sorted({lic for lics in manifest["licenses"].values() for lic in lics})
-    lines = ["---", "language:", "- ko", f"license: {'other' if len(all_licenses) != 1 else all_licenses[0]}",
-             "task_categories:", "- text-generation", "tags:", "- persona", "- roleplay", "- sft", "- korean",
+    language = str(manifest.get("language") or "").strip()
+    tags = ["- persona", "- roleplay", "- sft"] + (["- korean"] if language == "ko" else [])
+    lines = ["---", *(["language:", f"- {language}"] if language else []),
+             f"license: {'other' if len(all_licenses) != 1 else all_licenses[0]}",
+             "task_categories:", "- text-generation", "tags:", *tags,
              "size_categories:", f"- {size_bucket}", "---", "",
              f"# {manifest['name']}", "",
              f"`{manifest['persona']}` 페르소나(프로필 `{manifest['profile']}`) PEFT 미세조정 데이터셋. "
@@ -229,7 +242,10 @@ def dataset_card(manifest: Mapping[str, Any], system_prompt: str) -> str:
     if manifest["source_datasets"]:
         lines += ["", "외부 데이터셋 (사용자 발화의 원본):", ""]
         for name, d in manifest["source_datasets"].items():
-            lang = f", 원어 {d['original_language']} → 교사 번역" if d.get("original_language") else ""
+            lang = ""
+            if d.get("original_language"):
+                model = f"`{d['translator']}`" if d.get("translator") else "교사"
+                lang = f", 원어 {d['original_language']} → {model} 번역"
             lines.append(f"- `{name}` ({d['license']}{lang}) — {d.get('url') or '로컬 파일'} — {d['records']:,} records")
     lines += ["", "## 생성 모델", ""] + [f"- `{m}`: {n:,} records" for m, n in manifest["generators"].items()]
     lr = manifest["length_report"]

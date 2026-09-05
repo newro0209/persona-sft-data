@@ -92,7 +92,8 @@ class RespondStage:
                 yield {
                     "id": f"respond-{u['id']}", "source": "respond", "scenario": f"source:{u['source']}",
                     "utterance_id": u["id"], "source_dataset": u["source"], "source_url": u.get("url"),
-                    "original_language": u.get("original_language"), "license": u["license"],
+                    "original_language": u.get("original_language"), "translator": u.get("translator"),
+                    "license": u["license"],
                     "generator": [cfg.model],
                     "turns": [{"role": "user", "text": u["text"]}, {"role": "assistant", "text": reply}],
                 }

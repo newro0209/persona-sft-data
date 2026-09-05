@@ -3,6 +3,13 @@
 - 상태: 사용자 승인 완료 (2026-09-05)
 - 대상: `persona_sft_data/` 전면 재구성, 문서·설정·테스트 재작성, 구 산출물 삭제
 - 선행 문서: 구 설계 `docs/pipeline-design.md` (이 스펙이 대체하며 삭제한다)
+- 2026-09-06 구현 후 실제 코드에 맞게 정정한 절: §4.2(`describe()` 반환형,
+  `TranslatorFactory.build` 시그니처) · §5(필수 단계는 `assemble`뿐) ·
+  §6.2(`Persona.length_rule()` 삭제, 값 해석은 규칙 플러그인) · §6.3(`## 대화 흐름`
+  이관) · §8(`respond`의 `translator`) · §9(`reject_record` 센티널, `finalize` 훅) ·
+  §10.6(split 파일을 `finalize`에서) · §11.3(언어 이름 표는 `teacher/prompts.py`) ·
+  §12(`register`의 존댓말 쪽은 허용 목록) · §13(개행과 `trim_blocks`, 카드의
+  `language`·번역 모델, split 파일의 출처). 그 밖의 절은 승인 당시 그대로다.
 
 ## 1. 목적
 
@@ -112,7 +119,7 @@ class Registry(Generic[T]):
     def register(self, name: str) -> Callable[[T], T]: ...   # 데코레이터
     def get(self, name: str) -> T: ...                 # 없으면 PluginError: 등록된 이름 목록 포함
     def names(self) -> list[str]: ...
-    def describe(self) -> list[tuple[str, str, str]]: ...  # (이름, 출처, 객체 경로)
+    def describe(self) -> list[Registration[T]]: ...   # 이름 순. Registration(name, obj, origin, path)
 
 STAGES      = Registry("persona_sft_data.stages")
 FORMATS     = Registry("persona_sft_data.formats")
@@ -139,13 +146,20 @@ RULES       = Registry("persona_sft_data.rules")
 각 그룹의 인터페이스는 `core/plugin.py`에 `Protocol`로 둔다. 플러그인은 상속 없이
 모양만 맞추면 된다.
 
+두 곳이 구현에서 이 스펙의 첫 안과 달라졌다. `describe()`는 이름 없는 tuple 대신
+`Registration(name, obj, origin, path)` 데이터클래스를 돌려준다 — `plugins` 명령이
+필드 이름으로 표를 만들고, 레지스트리 내부도 같은 객체를 담고 있어 변환이 없다.
+번역기 팩토리는 `build(ctx, teacher)`다: 번역기는 자기 설정 dataclass가 없고,
+`ingest`가 이미 만들어 둔 교사(`ingest.teacher`)를 그대로 받는다. 같은 서버에 두 번
+붙을 이유가 없고, `ctx`에 설정·로거·언어가 다 들어 있다.
+
 | 그룹 | 인터페이스 요약 |
 | --- | --- |
 | stages | `name`, `mode: "records"\|"artifact"`, `record_kind: "session"\|"utterance"\|None`, `produces: "raw"\|"filtered"\|"final"\|None`, `settings_type: type`, `requires(config) -> tuple[str, ...]`, `preflight(ctx)`, `run(ctx)` |
 | formats | `name`, `extensions`, `rows(data: bytes, fields: Sequence[str]) -> Iterator[dict]` |
 | extractors | `name`, `settings_type`, `extract(row: dict, fields: Sequence[str], settings) -> Iterator[str]` |
 | teachers | `name`, `build(cfg: TeacherConfig) -> Teacher`; `Teacher`는 `check()`, `generate(requests) -> list[Result]` |
-| translators | `name`, `build(ctx, settings) -> Translator`; `Translator`는 `translate(texts, source_language) -> list[str \| None]` |
+| translators | `name`, `build(ctx, teacher) -> Translator`; `Translator`는 `translate(texts, source_language) -> list[str \| None]` |
 | recipes | `name`, `settings_type`, `write(out_dir, export_info, settings) -> list[Path]` |
 | profiles | `name`, `assistant_label`, `user_label`, `writer_framing`, `required_sections`, `default_flows`, `default_turns`, `extra_rules`, `document_template()` |
 | rules | `name`, `constraint_key`, `build(persona, value, settings) -> Rule`; `Rule.check(turns, verdict)` |
@@ -272,8 +286,11 @@ JSON 하나가 모델 id·URL·경로·비율·한도가 나타나는 유일한 
 - `stages.<이름>`은 `STAGES`에 있어야 하고, 값은 그 단계의 `settings_type` dataclass로
   생성된다. 모르는 키·빠진 필수 키는 `ConfigError`가 단계 이름과 함께 알린다.
   `teacher`·`translator`가 있으면 존재하는 이름이어야 한다.
-- `ingest`·`respond`·`filter`·`export`는 설정에서 뺄 수 있다. `dialogue`와 `assemble`은
-  필수. `respond`가 있으면 `ingest`도 있어야 한다.
+- `ingest`·`respond`·`filter`·`export`는 설정에서 뺄 수 있다. **`assemble`만 필수**이고,
+  `respond`가 있으면 `ingest`도 있어야 한다. `dialogue`는 사실상 거의 항상 필요하지만
+  검증이 강제하지 않는다 — 외부 데이터셋만으로 코퍼스를 만드는 설정(`ingest`+`respond`
+  +`assemble`)이 정당하고, `assemble.ratios`의 키가 "설정된 세션 생성 단계의 부분집합"
+  이어야 한다는 규칙이 이미 세션 생성 단계가 하나도 없는 설정을 막는다.
 - `assemble.ratios`의 키는 설정된 세션 생성 단계 이름의 부분집합이며 합은 1.
 - 모든 상대 경로는 설정 파일의 부모의 부모(저장소 루트)를 기준으로 푼다. 지금과 같다.
 - `stage_seed(name)`은 전역 시드에서 단계별로 파생한다. 지금과 같다.
@@ -331,9 +348,14 @@ class Persona:
     source: Path
 
     beats -> tuple[str, ...]                # 다룰 상황을 쉼표로 쪼갠 것
-    length_rule() -> LengthRule             # 제약 표 발화 길이 해석 (단위: 글자|문장)
     system_prompt() -> str                  # 핵심 정의 + 배경 + 발화 원칙 + 하지 않는 것
 ```
+
+`Persona`는 제약 표를 **해석하지 않는다.** `constraints`에 문자열 그대로 담아 두고,
+`N~M글자`/`N~M문장` 같은 값의 문법을 아는 것은 그 값을 쓰는 규칙 플러그인뿐이다 —
+발화 길이는 `rules/length.py`의 `LengthFactory.build()`가 파싱해 `LengthRule(lo, hi,
+unit)`을 만든다. 규칙마다 값 문법이 다르므로 해석을 규칙 쪽에 두면 `Persona`가
+규칙 목록을 알 필요가 없고, 새 규칙을 붙일 때 `Persona`를 건드리지 않는다.
 
 `system_prompt()`는 문서의 표·목록을 평문으로 옮긴 것이고 프롬프트용 문장을 따로
 쓰지 않는다. 지금과 같은 원칙이다. `제약` 표는 시스템 프롬프트에 넣지 않는다 —
@@ -348,6 +370,9 @@ class Persona:
   이름 어미=금지, 말줄임표=최대 1개. 전부 지금 게이트가 하는 검사와 같다.
 - `## 감정 표현과 어휘` → `## 어휘와 표현`. `## 고정 프리앰블 대화` → `## 예시 대화`,
   `<|u|>`/`<|p|>` 태그를 `U:`/`A:` 줄로 바꾼다.
+- `## 대화 흐름` 절을 추가한다(불릿). `dialogue`가 흐름을 고를 때 `persona.flows`를
+  `profile.default_flows`보다 먼저 쓰므로, 이 절이 있으면 프로필 기본값 대신 문서의
+  흐름이 쓰인다.
 - 그 외 페르소나의 의미(이름·말투·성격·원칙·상황·금지)는 바꾸지 않는다.
 
 ## 7. 프로필
@@ -392,8 +417,11 @@ FakeTeacher로 형식 계약만 검증하며, 실제 교사 수율은 **미측�
 
 `turns`는 `user`로 시작해 `assistant`로 끝나며 번갈아 온다. 짝수 개. 텍스트는 NFC,
 공백 정규화, 비어 있지 않음. `pet` 역할과 `<|u|>`/`<|p|>` 태그는 없다. `respond`의
-레코드는 `utterance_id`·`source_dataset`·`source_url`·`original_language`를 추가로
-갖는다. `assemble`은 `split`을 붙인다.
+레코드는 `utterance_id`·`source_dataset`·`source_url`·`original_language`·`translator`
+를 추가로 갖는다 — 발화의 출처 필드를 하나도 잃지 않고 옮긴다. 데이터 카드가 소스별
+번역 모델을 적을 수 있는 것은 `translator`가 여기까지 따라오기 때문이다(§13).
+번역되지 않은 발화에서 온 레코드는 `original_language`·`translator`가 `null`이다.
+`assemble`은 `split`을 붙인다.
 
 **발화** — `ingest`의 레코드.
 
@@ -427,14 +455,30 @@ class RecordKind(Protocol):
    턴 수 범위는 `filter` 단계 설정에서 오고, `filter`가 설정에 없으면 기본값
    (`min_turns` 2, `max_turns` 16)을 쓴다. 생성 단계도 낼 때부터 같은 게이트를
    통과하므로 `raw/`에는 이미 통과분만 있다. 지금과 같다.
-2. `stage.run(ctx)`가 내는 레코드마다: `_metric` 센티널이면 통계에 합산. 아니면
-   `kind.normalize` → 실패는 `schema:<이유>`로 거절. 지문 중복은 `duplicate`로 거절.
-   `gated`면 `gate.check` → 실패 사유로 거절. 통과분은 출력에 쓰고 표본 200개를 저수지
-   표집한다.
-3. `<출력>.rejected.jsonl`(거절 전부 + `_reject_reasons`), `<출력>.sample.jsonl`,
-   `<출력>.stats.json`을 쓴다. 통계 필드는 지금과 같다(`produced` `rejected` `duplicates`
-   `source_filtered` `reject_reasons` `teacher_model` `teacher_calls` `teacher_failures`
-   `completion_tokens` `seconds` `environment`).
+2. `stage.run(ctx)`가 내는 레코드마다: `metric(**kwargs)` 센티널(`{"_metric": True, …}`)
+   이면 통계에 합산. `reject_record(record, reasons)` 센티널(`{"_reject": True, …}`)이면
+   정규화·게이트를 다시 걸지 않고 그 사유로 거절한다. 그 밖이면 `kind.normalize` →
+   실패는 `schema:<이유>`로 거절. 지문 중복은 `duplicate`로 거절. `gated`면
+   `gate.check` → 실패 사유로 거절. 통과분은 출력에 쓰고 표본 200개를 저수지 표집한다.
+3. 출력·거절 파일은 `.tmp`에 쓰고 단계가 끝까지 성공한 뒤에 `os.replace`로 제자리에
+   옮긴다. 그다음 `<출력>.rejected.jsonl`(거절 전부 + `_reject_reasons`),
+   `<출력>.sample.jsonl`, `<출력>.stats.json`을 쓴다. 통계 필드는 지금과 같다
+   (`produced` `rejected` `duplicates` `source_filtered` `reject_reasons`
+   `teacher_model` `teacher_calls` `teacher_failures` `completion_tokens` `seconds`
+   `environment`).
+4. 단계가 `finalize(ctx, stats)`를 선언해 두면 마지막에 그것을 부른다(선택). 3의
+   교체·통계 쓰기가 끝난 뒤이므로 `finalize`는 `ctx.output`을 다시 읽어 파생 파일을
+   만들 수 있다. `assemble`이 이것으로 split 파일과 `final/manifest.json`을 쓴다.
+
+**센티널이 둘인 이유.** 남길 레코드가 있는 거절(단계가 파일 전체를 보고 거른 것)은
+`reject_record()`로 넘겨 `.rejected.jsonl`에 남기고, 남길 레코드가 아예 없는 거절
+(교사 호출 실패 `teacher_error`, 파싱 실패 `unparseable`, 빈 응답 `empty_reply`)은
+`metric(rejected=…, reject_reasons=…)`으로 개수만 센다. 같은 거절을 둘 다로 보고하면
+이중 계수가 된다.
+
+**`finalize`가 필요한 이유.** 파생 파일을 `run` 안에서 쓰면 러너의 정규화·중복
+제거·게이트를 우회해, 러너가 거절한 레코드가 파생 파일에 남는다. `assemble`이
+`run`에서 split 파일을 쓰면 `export`가 거절된 세션을 데이터셋에 싣게 된다.
 
 `mode == "artifact"`인 단계(`export`)는 러너를 거치지 않는다. `run(ctx)`가 직접
 파일을 쓰고 `StageStats`를 돌려준다.
@@ -531,9 +575,10 @@ profile.default_flows`에서 추첨, 배치는 교사
 설정 `AssembleSettings(ratios, max_sessions, split)`. `filtered/`의 세션을 `source`
 필드(=생성 단계 이름)로 버킷에 모으고, 버킷마다 `max_sessions * ratio`개를 섞어서
 뽑는다. 모자라면 `SHORTFALL`로 로그와 manifest에 적고 비율을 조용히 바꾸지 않는다.
-전체를 섞은 뒤 **세션 단위**로 `split`에 따라 `train`/`val`/`test`를 붙이고,
-`final/{train,val,test}.jsonl`과 `final/manifest.json`(설정 전체, 페르소나 해시,
-버킷별 개수, 부족분, 단계별 stats 요약)을 쓴다. 토큰 예산·토크나이저·글자당 토큰
+전체를 섞은 뒤 **세션 단위**로 `split`에 따라 `train`/`val`/`test`를 붙여 러너에
+yield 한다. `final/{train,val,test}.jsonl`과 `final/manifest.json`(설정 전체, 페르소나
+해시, 버킷별 개수, 부족분, 단계별 stats 요약)은 `run`이 아니라 `finalize(ctx, stats)`
+에서 쓴다 — 러너 통과분만 실려야 하므로(§9). 토큰 예산·토크나이저·글자당 토큰
 추정은 없다.
 
 ### 10.7 export
@@ -570,8 +615,9 @@ profile.default_flows`에서 추첨, 배치는 교사
 `TeacherTranslator`는 `ingest.teacher`로 지정된 교사에 배치로 보낸다. 프롬프트는
 `prompts.translate_system(source_language, target_language)`: "다음 {원어} 문장을
 자연스러운 {목표어} 구어체로 옮겨라. 뜻만 옮기고 설명·따옴표·역할 표기 없이 한 줄."
-언어 코드 → 이름은 `translate.py`의 작은 표(ko·en·ja·zh)이고 없는 코드는 코드
-그대로 쓴다. 응답은 `reply_text`로 정리한다. `check`는 `ingest`의 소스 중 번역이
+언어 코드 → 이름 표(`LANGUAGE_NAMES`)와 `language_name()`은 `teacher/prompts.py`에
+있다 — 프롬프트 문자열이 전부 거기 모여 있고 `sources/translate.py`는 배치 나누기와
+실패 자리 표시만 맡는다. 표에 없는 코드는 코드 그대로 쓴다. 응답은 `reply_text`로 정리한다. `check`는 `ingest`의 소스 중 번역이
 필요한 것이 있을 때만 교사를 확인한다.
 
 ### 11.4 금칙어·주제
@@ -594,7 +640,7 @@ profile.default_flows`에서 추첨, 배치는 교사
 
 | 규칙 | 검사 (assistant 발화만) | 사유 |
 | --- | --- | --- |
-| `register` | 반말이면 존댓말 종결(`~요` `습니다` `세요` …) 거절. 존댓말이면 반말 종결(`~어`/`~아`/`~지`/`~야` 종결) 거절 | `honorific` / `informal_ending` |
+| `register` | 반말이면 존댓말 표현(`~요` `습니다` `세요` …)이 있으면 거절. 존댓말이면 **존댓말 종결이 아니면** 거절 (반말 종결 목록을 열거하지 않는다) | `honorific` / `informal_ending` |
 | `length` | 글자 수 또는 문장 수(`.?!…` 기준)가 범위 밖 | `assistant_too_short` / `assistant_too_long` |
 | `script` | 한글이면 한자·가나·라틴 단어 거절, 한글 없음 거절. 영문이면 한글·한자·가나 거절 | `cjk_characters` `kana_characters` `latin_words` `no_hangul` `hangul_characters` |
 | `emoji` | 기호·이모지 문자 | `emoji` |
@@ -606,12 +652,26 @@ profile.default_flows`에서 추첨, 배치는 교사
 | `name_suffix` | 이름의 음절을 어미로 단 토큰 | `name_suffix_babytalk` |
 | `ellipsis` | `…` 개수 > N | `multiple_ellipsis` |
 
+`register`의 존댓말 쪽은 **허용 목록**이다: 반말 종결을 열거해 거절하는 것이 아니라,
+문장 끝이 존댓말 종결이 아니면 `informal_ending`으로 거절한다. 반말 종결은 수가
+많고 계속 늘어나므로 열거하는 쪽이 늘 뚫린다. 두 정규식(존댓말 표현·존댓말 종결)의
+실제 목록은 `rules/register.py`의 `HONORIFIC`·`HONORIFIC_END`가 단일 출처다 — 이
+표는 목록을 복사하지 않는다.
+
 지금 `test_foundation.py`의 "실제 교사 출력에서 나온 위반" 케이스는 전부 그대로
 통과해야 한다(`mongle.md`의 제약 표가 같은 규칙을 켜므로).
 
 ## 13. 내보내기와 레시피
 
-`export`는 `final/{train,val,test}.jsonl`을 읽어 `datasets/<name>/`을 만든다.
+`export`는 `final/{train,val,test}.jsonl`을 읽어 `datasets/<name>/`을 만든다
+(`ctx.config.final(split)`, split은 `train`·`val`·`test`. 하나라도 없으면
+"먼저 assemble 단계를 돌려라"로 멈춘다).
+
+그 세 파일은 `assemble`의 `finalize(ctx, stats)`가 쓴다. `assemble`은 러너에 세션을
+yield 할 뿐이고(러너 출력은 `final/assemble.jsonl`), 러너가 정규화·지문 중복 제거·
+게이트를 끝내고 출력을 제자리에 옮긴 뒤에 `finalize`가 그 출력을 다시 읽어 `split`
+필드별로 나눈다. 그래서 `export`가 데이터셋에 싣는 것은 **러너 통과분뿐**이다 —
+거절된 세션은 `final/assemble.jsonl.rejected.jsonl`에만 있다.
 
 ```
 datasets/<name>/
@@ -648,6 +708,16 @@ jinja 쪽은 assistant 본문을 `{% generation %}…{% endgeneration %}`로 감
 `assistant_only_loss`가 마스크를 만들 수 있게 한다. 테스트가 파이썬 렌더러의 출력을
 손으로 쓴 기대 문자열과 대조한다.
 
+**jinja 텍스트의 개행은 블록 태그 앞에 둔다.** 트레이너가 어떤 jinja 환경으로 이
+텍스트를 컴파일할지 우리가 정하지 못하고, `trim_blocks=True`면 블록 태그 바로 뒤의
+개행이 사라진다. `<|im_end|>{% endgeneration %}\n`처럼 쓰면 그 환경에서 assistant 턴
+뒤 개행이 없어져 `<|im_end|>`와 다음 `<|im_start|>`가 붙어 위 형식과 다른 바이트가
+나온다. 그래서 개행을 `{% endgeneration %}` **앞**의 리터럴로 두고 뒤에 남는 공백은
+`{%- else`로 걷어 낸다. 테스트가 기본 환경과 `trim_blocks`/`lstrip_blocks` 환경에서
+각각 렌더해 파이썬 렌더러와 바이트가 같은지 확인한다(`{% generation %}`은 표준
+jinja2가 모르는 태그이므로 테스트가 최소 확장으로 파싱시킨다 — 태그를 지워 렌더하면
+블록 구조가 사라져 이 결함을 잡지 못한다).
+
 **레시피 `llamafactory`.** 설정 `LlamaFactorySettings(lora_rank, lora_alpha,
 lora_dropout=0.05, learning_rate, epochs, cutoff_len, batch_size,
 gradient_accumulation, warmup_ratio=0.05)`.
@@ -678,7 +748,13 @@ manifest에 `length_report`로 방법과 분위수를 적는다.
 
 **데이터 카드.** 지금 카드에 더해 소스별 원어와 번역 모델, 프로필, 학생 모델,
 채팅 템플릿 이름, 길이 보고를 적는다. 번역된 소스가 있으면 원본 라이선스를 그대로
-표시한다.
+표시한다. 번역 모델은 발화 레코드의 `translator`가 `respond` 세션 레코드로 옮겨진
+것을 `manifest.source_datasets[<이름>].translator`로 모은 값이다(§8).
+
+YAML 머리말의 `language` 목록과 언어 태그(`korean`은 `ko`일 때만)는 설정의
+`language`에서 만들고, 그 값은 `manifest.language`로 실려 온다. 카드 생성 함수
+(`dataset_card(manifest, system_prompt)`)는 manifest만 보므로 코드에 언어 리터럴이
+박히지 않는다(§3).
 
 ## 14. CLI
 

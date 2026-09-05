@@ -24,8 +24,8 @@
   'mirrored' or 'nat'.
 
 .EXAMPLE
-  .\tools\setup\wsl_net_mode.ps1 mirrored   # before pip install / hf download
-  .\tools\setup\wsl_net_mode.ps1 nat        # before vllm serve
+  .\setup\wsl_net_mode.ps1 mirrored   # before pip install / hf download
+  .\setup\wsl_net_mode.ps1 nat        # before vllm serve
 #>
 param(
     [Parameter(Mandatory = $true)]
@@ -41,7 +41,7 @@ if ($Mode -eq 'mirrored') {
 # Written by setup/wsl_net_mode.ps1 -- mirrored mode.
 # Needed for outbound TCP (pip, hf download); NAT drops it on this machine.
 # firewall=false because the Hyper-V firewall blocks WSL listeners otherwise.
-# Switch back with: tools\setup\wsl_net_mode.ps1 nat
+# Switch back with: setup\wsl_net_mode.ps1 nat
 [wsl2]
 networkingMode=mirrored
 dnsTunneling=true

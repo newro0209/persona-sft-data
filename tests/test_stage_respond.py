@@ -30,14 +30,27 @@ def test_each_utterance_becomes_a_two_turn_session_with_provenance(tmp_path):
     assert en["id"] == "respond-en-000000" and en["source"] == "respond" and en["scenario"] == "source:en"
     assert en["source_dataset"] == "en" and en["source_url"] == "http://x" and en["original_language"] == "en"
     assert en["license"] == "cc-by-4.0" and en["generator"] == ["fake"]
+    # 번역 모델도 세션으로 옮겨진다 -- 데이터 카드가 소스별 번역 모델을 적는 근거다.
+    assert en["translator"] == "fake" and records["ko-000001"]["translator"] is None
     assert en["turns"] == [{"role": "user", "text": "같이 놀자"}, {"role": "assistant", "text": "응, 좋아 같이."}]
     assert all("[반드시 지킬 것]" in r.system for r in fake.seen)
 
 
-def test_empty_replies_and_limit(tmp_path):
-    fake = FakeTeacher(reply_fn=lambda r: "" if "졸려" in r.user else "응.")
-    stats = execute(RespondStage(teacher=fake), _config(tmp_path, limit=2), log=lambda m: None)
-    assert len(fake.seen) == 2 and stats.produced + stats.rejected == 2
+def test_empty_replies_are_rejected_and_limit_caps_the_requests(tmp_path):
+    """빈 답은 ``empty_reply``로 거절되고 그 발화는 출력에 없다. limit은 요청 수를 자른다.
+
+    답은 게이트(4~35글자 반말)를 통과하는 것으로 쓴다 -- 게이트에 걸리는 답을 쓰면
+    ``empty_reply`` 경로와 길이 거절이 섞여 무엇이 걸렀는지 구분되지 않는다.
+    """
+    fake = FakeTeacher(reply_fn=lambda r: "" if "졸려" in r.user else "응, 좋아.")
+    cfg = _config(tmp_path, limit=2)
+    stats = execute(RespondStage(teacher=fake), cfg, log=lambda m: None)
+    assert len(fake.seen) == 2                      # 발화 3개 중 2개만 교사에게 간다
+    assert stats.produced == 1
+    assert stats.reject_reasons.get("empty_reply") == 1
+    asked = {r.key for r in fake.seen}
+    produced_ids = {r["utterance_id"] for r in read_jsonl(cfg.raw("respond"))}
+    assert "ko-000002" in asked and produced_ids == asked - {"ko-000002"}
 
 
 def test_missing_ingest_output_says_which_stage_to_run(tmp_path):
