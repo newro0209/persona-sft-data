@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import importlib
 
-BUILTIN_MODULES: tuple[str, ...] = ()
+BUILTIN_MODULES: tuple[str, ...] = (
+    "persona_sft_data.rules",
+)
 
 _loaded = False
 
