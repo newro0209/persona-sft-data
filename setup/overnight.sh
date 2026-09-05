@@ -1,21 +1,15 @@
 #!/usr/bin/env bash
 #
-# The whole generation chain, unattended: seed, expand, real, template, filter,
-# assemble, export. About six hours at the measured rates -- seed 23.3 calls/s
-# on the 30B, expand 27.2 on the 3B.
+# 생성 체인 전체를 무인으로: dialogue(추론 교사) → ingest·respond(대량 교사) →
+# filter → assemble → export. 모델 교체는 파이프라인 밖의 일이라 여기 있다 —
+# 파이프라인은 서버에 붙을 뿐 서버를 관리하지 않는다.
 #
 #   MSYS_NO_PATHCONV=1 wsl.exe bash -lc \
 #     'bash /mnt/c/Users/newro/projects/persona-sft-data/setup/overnight.sh'
 #
-# Model swapping lives here rather than in the pipeline on purpose: the
-# pipeline connects to a server, it does not manage one.
-#
-# Every step appends to $LOG and the script keeps going where it safely can, so
-# a morning reader sees how far it got rather than one truncated failure.
-#
-# Training is not here. This project ends at a dataset; what consumes it
-# (my-llm's tokenizer, pack and sweep, or an SFT trainer) is the consumer's
-# script. The GPU is released at the end for whatever that is.
+# 단계마다 $LOG에 덧붙이고, 안전한 곳에서는 계속 가므로 아침에 어디까지 갔는지
+# 보인다. 학습은 여기 없다 — 이 프로젝트는 데이터셋과 레시피에서 끝나고,
+# recipe/llamafactory/lora_sft.yaml을 LLaMA-Factory에 넘기는 것은 다음 일이다.
 set -uo pipefail
 
 REPO=/mnt/c/Users/newro/projects/persona-sft-data
@@ -50,7 +44,7 @@ serve() {
         fi
         sleep 5
     done
-    echo "  timeout waiting for /health" | tee -a "$LOG"
+    echo "  timeout waiting for startup" | tee -a "$LOG"
     return 1
 }
 
@@ -66,20 +60,19 @@ cd "$REPO" || fail "cannot cd $REPO"
 say "start"
 
 serve "$REASONER" || fail "reasoner would not start"
-stage seed
+stage dialogue
 
 serve "$BULK" || fail "bulk teacher would not start"
-stage expand
-stage real
+stage ingest
+stage respond
 
-# Nothing after this needs a teacher; give the GPU back.
+# 이 뒤는 교사가 필요 없다. GPU를 돌려준다.
 say "stopping vllm"
 pkill -f "vllm serve" 2>/dev/null || true
 sleep 10
 
-stage template
 stage filter
 stage assemble
 stage export
 
-say "done -- dataset in datasets/, corpus in data/final/"
+say "done -- dataset and recipe in datasets/, corpus in data/final/"

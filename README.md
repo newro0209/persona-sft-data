@@ -1,129 +1,152 @@
 # persona-sft-data
 
-페르소나 문서 하나와 교사 모델 하나로 **LLM 페르소나 미세조정 데이터셋**을 만든다.
-페르소나가 무엇을 말하고 무엇을 말하지 않는지는 `personas/<이름>.md` 한 곳에만
-있다. 코드에는 페르소나 문자열이 없고, 테스트가 그것을 강제한다.
+페르소나 문서 하나, 교사 모델, 그리고 임의 포맷·임의 언어의 외부 텍스트 데이터셋에서
+**사전학습 LLM을 PEFT(LoRA)로 미세조정할 데이터셋과 학습 레시피**를 만든다.
 
-지금 들어 있는 페르소나는 `몽글` — 작은 반려 펫, 항상 반말, 한 발화 4~35자.
-그 데이터셋은 **384,020개 대화 / 1,901,432턴**이고 `datasets/mongle-v1/`에
-OpenAI `messages` 포맷으로 내보내진다. 원래는 [my-llm](../my-llm)의 ESP32용
-소형 모델을 학습시키려고 만든 파이프라인이며, 그쪽은 여기서 나온 코퍼스를
-받아 자기 토크나이저로 패킹한다.
+- 페르소나가 무엇을 말하고 무엇을 말하지 않는지는 `personas/<이름>.md` 한 곳에만 있다.
+  코드에는 페르소나 문자열이 없고, 테스트가 그것을 강제한다.
+- 반려 펫만이 아니다. `companion` `npc` `novel` `trpg` `lore` 프로필이 각각 다른
+  용도(AI 반려로봇, 게임 NPC, 소설 인물, TRPG 진행자, 세계관 안내자)의 기본값을 준다.
+- 단계·포맷·추출기·교사·번역기·레시피·프로필·규칙 여덟 확장점이 전부 플러그인이다.
+  내장도 같은 경로로 등록되고, `plugins` 명령이 한 표로 보여 준다.
+
+원래는 ESP32용 소형 모델을 처음부터 학습시킬 코퍼스를 만드는 파이프라인이었고, 그
+결과(38만 세션)는 [my-llm](../my-llm)이 소비했다. 2026-09-05에 목적을 PEFT로 바꿨다 —
+배경은 `docs/superpowers/specs/2026-09-05-peft-persona-toolkit-design.md`.
 
 ## 빠르게
 
 ```powershell
 uv venv .venv --python 3.12
-uv pip install --python .venv\Scripts\python.exe -e ".[dev,real]"
-.venv\Scripts\python.exe -m pytest                                        # 90개, 1초
+uv pip install --python .venv\Scripts\python.exe -e ".[dev,parquet]"
+.venv\Scripts\python.exe -m pytest                                   # GPU·네트워크 없이 전부
 
-.venv\Scripts\python.exe -m persona_sft_data check  --config configs/mongle.json   # 설정·페르소나·교사 점검
-.venv\Scripts\python.exe -m persona_sft_data run    --config configs/mongle.json   # 전부 (교사 서버 필요, ~6시간)
-.venv\Scripts\python.exe -m persona_sft_data export --config configs/mongle.json   # 조립된 코퍼스 → 데이터셋 (10초)
+persona-sft-data check   --config configs/mongle.json   # 설정·페르소나·교사·소스 점검
+persona-sft-data run     --config configs/mongle.json   # 전부 (교사 서버 필요)
+persona-sft-data export  --config configs/mongle.json   # 조립된 코퍼스 → 데이터셋 + 레시피
 ```
 
-`run --stage seed|expand|real|template|filter|assemble|export`로 한 단계만 돌릴 수
-있다. 교사 없이 파이프라인 전체를 돌려 보려면 `configs/smoke.json`
-(`FakeTeacher`, 몇 분).
+교사 없이 전체 흐름을 보려면 `configs/smoke.json`(`kind: fake` 교사, 로컬 픽스처 소스).
+`run --stage <단계>`로 한 단계만 돌린다.
 
 ## 파이프라인
 
 ```
-personas/mongle.md ─┐
-                    ├─ seed ──── 추론 교사(30B)가 상황(59 beat)마다 대화를 새로 씀
-                    ├─ expand ── 대량 교사(3B)가 seed 하나당 변주 3개
-                    ├─ real ──── 공개 한국어 대화 4종의 사용자 발화에 교사가 페르소나로 답함
-                    └─ template  페르소나 어휘표만으로 조합 (교사 없음)
-                          │
-                       filter ── 페르소나 문서에서 파생된 게이트: 존댓말, 길이, AI 자칭, 역할표기, 반복 …
-                          │
-                       assemble  비율 혼합(teacher 0.7 / real 0.15 / template 0.15) · 세션 단위 분할 · manifest
-                          │
-                       export ── messages JSONL + system_prompt.txt + manifest.json + 데이터 카드
+sources ─ ingest(포맷·추출 → 표집 → 번역 → 주제·안전 필터) ─ respond(발화에 교사가 답함) ─┐
+personas/<이름>.md ─ dialogue(추론 교사가 상황·흐름별 대화 작성) ──────────────────────┼─ filter ─ assemble ─ export
 ```
 
-- **세션**이 내부 단위다: `{id, source, scenario, license, generator, turns:[{role:user|pet, text}]}`.
-  출처와 라이선스가 레코드마다 붙어 다니므로, 나중에 어떤 소스를 빼고 싶으면
-  필터 한 줄이다.
-- **모든 경로는 `data_root` 하나에서 파생된다.** `data/raw/`는 생성기가 낸 것,
-  `data/filtered/`는 게이트를 통과한 것, `data/final/`은 혼합·분할된 코퍼스.
-  단계마다 `.stats.json`(수율·거부 사유), `.rejected.jsonl`(버린 것 전부),
-  `.sample.jsonl`(사람이 읽을 200개)이 같이 나온다.
-- **게이트는 문서에서 나온다.** 금지 표현, 길이 범위(`4~35글자`), 상황 목록은
-  `personas/mongle.md`를 파싱해서 쓴다. 문서가 바뀌면 게이트도 바뀌고, 문서
-  형태가 깨지면 빈 규칙으로 조용히 넘어가지 않고 파서가 실패한다.
-- **교사는 설정에만 있다.** 모델 id가 코드에 나타나면 테스트가 실패한다.
-  vLLM의 OpenAI 호환 엔드포인트면 무엇이든 되고, `FakeTeacher`로 교사 없이도
-  전체 흐름이 돈다.
+- **레코드**는 둘이다. 세션 `{id, source, scenario, license, generator, turns:[{role: user|assistant, text}]}`,
+  발화 `{id, text, source, language, license, url, original_text?, original_language?, translator?}`.
+- **모든 경로는 `data_root` 하나에서 파생된다.** `raw/` 생성물, `filtered/` 게이트 통과분,
+  `final/` 혼합·분할 코퍼스. 단계마다 `.stats.json`, `.rejected.jsonl`, `.sample.jsonl`이 같이 나온다.
+- **게이트는 문서의 `## 제약` 표에서만 켜진다.** 행이 없는 규칙은 꺼진 것이다. 그래서
+  존댓말 NPC와 반말 펫이 같은 코드로 다른 검열을 받는다.
+- **교사·학생·소스는 설정에만 있다.** 모델 id, 데이터셋 URL, `data/` 경로가 코드에
+  나타나면 테스트가 실패한다.
 
-## 내보내기 포맷
+## 페르소나 문서
 
-`datasets/<name>/{train,val,test}.jsonl`, 한 줄에 한 대화:
+| 절 | 필수 | 쓰임 |
+| --- | --- | --- |
+| `## 핵심 정의` 표 (이름·정체성·사용자와의 관계·말투·성격·응답 길이·지식 범위) | 필수 | 시스템 프롬프트, 교사 프롬프트 |
+| `## 제약` 표 (`\| 규칙 \| 값 \|`) | 필수 | 게이트 규칙 생성 |
+| `## 발화 원칙` 번호 목록 | 필수 | 프롬프트 |
+| `## 다룰 상황` 번호 목록 (쉼표로 여러 순간) | 필수 | dialogue의 커버리지 단위 |
+| `## 배경` 자유 서술 | 프로필이 요구하면 | 세계관·설정을 프롬프트에 그대로 |
+| `## 하지 않는 말과 행동` · `## 어휘와 표현` · `## 대화 흐름` · `## 예시 대화` | 선택 | 프롬프트 |
+
+제약 표의 규칙 키: 말투(반말·존댓말·서술체·자유), 발화 길이(`N~M글자`/`N~M문장`),
+문자(한글·영문·혼용), 이모지, 마크다운, 역할 표기, AI 자칭, 반복, 3인칭 자칭, 이름 어미,
+말줄임표(`최대 N개`). 새 페르소나는 `persona-sft-data init <이름> --profile <프로필>`로
+골격을 만들고 채운다.
+
+## 외부 소스
+
+설정의 `sources`에 한 항목이면 된다. 포맷 `tsv` `csv` `jsonl` `json` `parquet` `text`,
+추출기 `field`(열 그대로) `regex`(패턴 그룹) `conversation`(role/content 목록의 사용자 역할)
+`list`(교대 발화 목록의 홀·짝). 목표 언어(`language`)와 다른 소스는 `ingest`가 교사로
+번역하고 원문을 함께 남긴다. `sources --sample 5 --translate`로 번역 전후를 눈으로 본다.
 
 ```json
-{"id": "...", "source": "teacher_seed", "scenario": "배고픔", "license": "synthetic",
- "generator": ["..."],
- "messages": [
-   {"role": "system",    "content": "이름: 몽글\n정체성: ...\n\n발화 원칙:\n1. ...\n\n하지 않는 말과 행동:\n- ..."},
-   {"role": "user",      "content": "배고파?"},
-   {"role": "assistant", "content": "응, 꼬르륵. 밥 줘."}
- ]}
+"soda": {"format": "parquet", "url": "https://huggingface.co/datasets/allenai/soda/resolve/refs%2Fconvert%2Fparquet/default/validation/0000.parquet",
+         "fields": ["dialogue"], "extract": {"kind": "list", "keep": "even"}, "language": "en", "license": "cc-by-4.0"}
 ```
 
-시스템 프롬프트는 페르소나 문서의 핵심 정의 표·발화 원칙·금지 목록을 그대로
-평문으로 옮긴 것이다(`Persona.system_prompt()`). 프롬프트용으로 따로 쓴 문장이
-없으므로, 모델이 학습하는 정의와 코퍼스를 생성·검열한 정의가 같은 것이다.
+## 내보내기
 
-Axolotl · LLaMA-Factory · TRL이 그대로 읽는다. 함께 나오는 `manifest.json`에
-분할별 개수·sha256, 소스별 라이선스, 생성 모델, 페르소나 문서 해시가 있고,
-`README.md`는 그것을 Hugging Face 데이터 카드로 렌더링한 것이다.
+`datasets/<name>/`에 `train|val|test.jsonl`(OpenAI `messages`, 시스템 프롬프트 포함),
+`system_prompt.txt`, `chat_template.jinja`(ChatML), `rendered_sample.txt`, `manifest.json`,
+데이터 카드 `README.md`, 그리고 `recipe/llamafactory/`에 `dataset_info.json`·`lora_sft.yaml`·
+실행 안내. `[student]` extra(`tokenizers`, `huggingface_hub`)가 있으면 학생 토크나이저로
+길이 분포를 재 `cutoff_len`을 제안하고, 없으면 글자 수로 재고 그렇다고 적는다.
 
-## 새 페르소나
+```bash
+llamafactory-cli train datasets/<name>/recipe/llamafactory/lora_sft.yaml
+```
 
-1. `personas/<이름>.md`를 `mongle.md`와 같은 절 구성으로 쓴다 — `## 핵심 정의`
-   (표), `## 발화 원칙`(번호 목록), `## 감정 표현과 어휘`(표), `## 하지 않는 말과
-   행동`(불릿), `## 다룰 상황`(번호 목록), `## 고정 프리앰블 대화`(코드 블록).
-   빠진 절은 파서가 거부한다.
-2. `configs/<이름>.json`을 `mongle.json`에서 복사해 `persona_doc`과
-   `stages.export.name`을 바꾼다.
-3. `check` → `run` → `export`.
+기본 학생은 `kakaocorp/kanana-2-1.3b-base`다. base 모델에는 채팅 템플릿이 없어 이
+프로젝트가 ChatML을 정하며, 추론 때도 `chat_template.jinja`를 써야 한다.
+
+## 플러그인
+
+```python
+from persona_sft_data.core.registry import FORMATS
+
+@FORMATS.register("xml")           # 설정의 "plugins": ["my_formats"]로 import 되면 등록된다
+class XmlFormat:
+    name = "xml"
+    extensions = (".xml",)
+    def rows(self, data, fields): ...
+```
+
+설치되는 패키지라면 `pyproject.toml`의 `[project.entry-points."persona_sft_data.formats"]`에
+선언한다. 인터페이스는 `persona_sft_data/core/plugin.py`. 우선순위는 설정 `plugins` >
+entry point > 내장이다.
+
+## 명령
+
+| 명령 | 하는 일 |
+| --- | --- |
+| `check` | 설정·페르소나·프로필·게이트, 단계별 preflight(교사 접속, 소스 표본, 학생 토크나이저) |
+| `run [--stage X]` | 설정된 단계를 의존 순서로 |
+| `export [--name N]` | assemble 결과에서 데이터셋·레시피만 |
+| `sources [--sample N] [--translate]` | 소스별 발화 표본 |
+| `status [--watch]` | 단계별 산출·거절 개수 |
+| `plugins` | 그룹별 등록 목록 |
+| `init <이름> [--profile P]` | 페르소나 문서와 설정 골격 |
 
 ## 교사 서버
 
-WSL2의 vLLM으로 `kakaocorp/kanana-2-3b-instruct`(대량)와 30B MoE의 AWQ w4a16
-(추론)을 번갈아 띄웠다. 재현 가능한 한 줄 설치가 `setup/wsl_vllm_setup.sh`,
-겪은 문제와 해법의 표가 [docs/wsl-vllm.md](docs/wsl-vllm.md)에 있다 — 새로
-시작하는 사람이 같은 함정을 다시 밟지 않도록 쓴 문서다. 무인 야간 실행은
-`setup/overnight.sh`.
+WSL2의 vLLM으로 `kakaocorp/kanana-2-3b-instruct`(대량)와 30B MoE의 AWQ w4a16(추론)을
+번갈아 띄운다. 설치는 `setup/wsl_vllm_setup.sh`, 함정과 해법은
+[docs/wsl-vllm.md](docs/wsl-vllm.md), 무인 실행은 `setup/overnight.sh`.
 
 ## 저장소 구조
 
 ```
-persona_sft_data/     파이프라인 (표준 라이브러리만)
-  config.py           PipelineConfig — 모든 경로·모델·비율의 유일한 출처
-  persona.py          페르소나 문서 파서 + system_prompt()
-  backend.py          OpenAI 호환 교사 클라이언트, FakeTeacher
-  prompts.py          교사 프롬프트 (규칙은 페르소나에서 렌더링)
-  gates.py            품질 게이트
-  runner.py           단계 계약: 정규화 → 중복 제거 → 게이트 → 통계
-  stages/             seed · expand · real · template · filter · assemble · export
-personas/             페르소나 문서 (단일 진실)
-configs/              mongle.json (본 실행), smoke.json (교사 없이)
-setup/, docs/         vLLM 교사 서버 구축, 트러블슈팅, 파이프라인 설계 스펙
-tests/                90개. 페르소나 문자열·모델 id·data/ 리터럴이 코드에 있으면 실패
-data/                 (gitignore) raw · filtered · final · cache · smoke
-datasets/             (gitignore) export 결과
+persona_sft_data/
+  cli.py          명령
+  core/           registry · plugin · config · persona · schema · runner · gates · builtins
+  rules/          제약 표 규칙 플러그인 11개 + 구조 규칙
+  teacher/        base · openai_compat · fake · prompts
+  profiles/       companion · npc · novel · trpg · lore
+  sources/        base · formats · extractors · translate · safety · topic
+  stages/         ingest · dialogue · respond · filter · assemble · export
+  recipes/        base · chat_template · llamafactory
+personas/         페르소나 문서 (단일 진실)
+configs/          mongle.json (본 실행), smoke.json (교사 없이)
+tests/            GPU·네트워크 없이 전부. fixtures/에 로컬 소스
+docs/             wsl-vllm.md, superpowers/specs·plans
+setup/            vLLM 설치·네트워크 모드·야간 실행
 ```
 
-## 이 코퍼스의 수치
+## 측정하지 않은 것
 
-| | |
-| --- | --- |
-| 세션 / 턴 | 384,020 / 1,901,432 |
-| 분할 | train 360,980 · val 11,520 · test 11,520 (세션 단위) |
-| 소스 | teacher_expand 173,605 · teacher_seed 79,991 · template 75,834 · real 54,590 |
-| 교사 호출 | seed 118,000 (수율 89%) · expand 316,509 (72%) · real 194,737 (28%) |
-| 생성 시간 | 약 6시간 (RTX 5090 하나, vLLM) |
-
-`real`의 수율 28%는 3B 교사의 답 72%가 35자 규칙을 넘겨서다. 그래서 `real`은
-목표 15%에 못 미치는 약 9%다 — 게이트를 풀지 않고 남겨 둔 미해결 문제다.
+- `companion` 프롬프트의 실제 교사 수율은 구 파이프라인에서 측정됐고(seed 89%, real 28%),
+  새 코드로는 아직 재측정하지 않았다.
+- `npc` `novel` `trpg` `lore` 프롬프트는 FakeTeacher로 형식만 검증했다. 실제 교사 수율은
+  **미측정**이다.
+- 3B 교사의 영→한 번역 품질은 **미측정**이다. 짧은 구어 문장에 한정해 쓴다.
+- kanana-2-1.3b-base + ChatML LoRA 학습은 **미실행**이다. 레시피는 LLaMA-Factory 문서의
+  필드로 구성했다.

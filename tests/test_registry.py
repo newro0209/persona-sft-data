@@ -90,3 +90,21 @@ def test_load_plugins_imports_modules_that_register_themselves(tmp_path, monkeyp
 def test_load_plugins_reports_the_module_it_could_not_import():
     with pytest.raises(PluginError, match="no_such_module_xyz"):
         load_plugins(["no_such_module_xyz"])
+
+
+def test_pyproject_declares_every_builtin_as_an_entry_point():
+    """내장도 entry point로 선언돼야 `plugins` 표가 내장과 외부를 같은 방식으로 보여 준다."""
+    import tomllib
+    from pathlib import Path
+    from persona_sft_data.core.registry import GROUPS
+
+    pyproject = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
+    declared = pyproject["project"]["entry-points"]
+    for group, registry in GROUPS.items():
+        builtin = {d.name for d in registry.describe() if d.origin == "builtin"}
+        assert builtin <= set(declared[f"persona_sft_data.{group}"]), (group, builtin)
+        for name in builtin:
+            module, _, attr = declared[f"persona_sft_data.{group}"][name].partition(":")
+            obj = getattr(__import__(module, fromlist=[attr]), attr)
+            registered = registry.get(name)
+            assert obj is registered or type(registered) is obj, (group, name)
