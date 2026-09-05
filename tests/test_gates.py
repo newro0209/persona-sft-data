@@ -77,11 +77,30 @@ def test_a_missing_row_switches_the_rule_off(tmp_path):
     assert not g.check(_session("잘 먹었어요.")).ok
 
 
-def test_honorific_persona_rejects_informal_endings(tmp_path):
-    g = build_gate(load(_doc_with_constraints(tmp_path, {"말투": "존댓말"})), GateSettings())
-    assert "informal_ending" in g.check(_session("응, 좋아.")).reasons
-    assert g.check(_session("네, 좋습니다.")).ok
-    assert g.check(_session("정말 그래요?")).ok
+@pytest.fixture
+def honorific_gate(tmp_path) -> Gate:
+    return build_gate(load(_doc_with_constraints(tmp_path, {"말투": "존댓말"})), GateSettings())
+
+
+def test_honorific_persona_rejects_informal_endings(honorific_gate):
+    assert "informal_ending" in honorific_gate.check(_session("응, 좋아.")).reasons
+    assert "informal_ending" in honorific_gate.check(_session("그래 알았어.")).reasons
+    assert honorific_gate.check(_session("네, 좋습니다.")).ok
+    assert honorific_gate.check(_session("정말 그래요?")).ok
+
+
+@pytest.mark.parametrize("text", [
+    "네.", "예.", "그렇군요.", "알겠습니다.", "무엇을 찾으시는지요?", "어서 오십시오.",
+    "아니오.", "여기 있습니다.", "무엇을 도와드릴까요?", "그리 하시오.", "음…",
+])
+def test_honorific_persona_passes_ordinary_polite_speech(honorific_gate, text):
+    """화이트리스트가 좁으면 '네.' 같은 정상 존댓말이 거절되어 수율이 깎인다."""
+    assert honorific_gate.check(_session(text)).ok, honorific_gate.check(_session(text)).reasons
+
+
+@pytest.mark.parametrize("text", ["응, 좋아.", "그래 알았어.", "같이 가자!", "재밌네.", "배고파"])
+def test_honorific_persona_still_rejects_informal_speech(honorific_gate, text):
+    assert "informal_ending" in honorific_gate.check(_session(text)).reasons
 
 
 def test_free_register_and_mixed_script_add_no_rule(tmp_path):

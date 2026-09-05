@@ -1,1 +1,1 @@
-"""Pipeline stages. Each reads jsonl and writes jsonl + stats."""
+"""파이프라인 단계. 각 단계는 jsonl을 읽고 jsonl과 통계·거절·표본 파일을 쓴다."""

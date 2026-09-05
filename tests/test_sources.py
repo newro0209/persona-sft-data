@@ -32,15 +32,26 @@ def test_tsv_reads_only_the_selected_columns_and_skips_empty_cells():
     assert list(base.read_utterances(cfg, data)) == ["밥 먹었어?", "밥 먹음?", "같이 놀자", "놀자ㅋㅋ", "졸려"]
 
 
+def test_csv_reads_only_the_selected_columns_and_honors_quoting():
+    """csv는 구분자만 tsv와 다르다. 쉼표를 품은 인용 필드가 한 발화로 남는지까지 본다."""
+    cfg = _cfg("s", "csv", "utterances.csv", ["informal", "chat"])
+    assert list(base.read_utterances(cfg, cfg.path.read_bytes())) == [
+        "밥 먹었어?", "밥 먹음?", "배고파, 밥 줘", "놀자ㅋㅋ", "졸려"]
+
+
 def test_jsonl_with_field_regex_and_conversation_extractors():
     data = (FIXTURES / "utterances.jsonl").read_bytes()
     assert list(base.read_utterances(_cfg("a", "jsonl", "utterances.jsonl", ["instruction"]), data)) == ["오늘 기분 어때?", "심심한데 뭐 하지"]
     rx = {"kind": "regex", "pattern": r"<usr>\s*(.*?)\s*(?=<bot>|<usr>|$)"}
     assert list(base.read_utterances(_cfg("b", "jsonl", "utterances.jsonl", ["text"], rx), data)) == ["배고파", "졸려"]
+    # 픽스처 마지막 턴에는 role 키가 없다(role == ""): exclude에 없으니 남고, include가 있으면 빠진다.
     conv = {"kind": "conversation", "exclude_roles": ["assistant", "bot"]}
-    assert list(base.read_utterances(_cfg("c", "jsonl", "utterances.jsonl", ["conv"], conv), data)) == ["같이 있자", "궁금해"]
+    assert list(base.read_utterances(_cfg("c", "jsonl", "utterances.jsonl", ["conv"], conv), data)) == ["같이 있자", "궁금해", "심심해"]
     only = {"kind": "conversation", "include_roles": ["human"]}
     assert list(base.read_utterances(_cfg("d", "jsonl", "utterances.jsonl", ["conv"], only), data)) == ["궁금해"]
+    # 역할 없는 턴을 골라내고 싶으면 include에 ""를 넣는다.
+    nameless = {"kind": "conversation", "include_roles": [""]}
+    assert list(base.read_utterances(_cfg("n", "jsonl", "utterances.jsonl", ["conv"], nameless), data)) == ["심심해"]
 
 
 def test_json_list_extractor_keeps_even_or_odd_or_all():

@@ -70,7 +70,14 @@ class IngestStage:
             data = fetch_source(cfg, cache, timeout=ctx.settings.download_timeout, log=ctx.log)
             if data is None:
                 continue
-            sample = list(islice(read_utterances(cfg, data), 3))
+            # run과 같은 처리: 읽을 수 없는 소스 하나는 그 소스만 건너뛴다. check가
+            # 깨진 jsonl이나 pyarrow 없는 parquet에서 트레이스백으로 죽으면 나머지
+            # 소스·단계를 아예 점검하지 못한다.
+            try:
+                sample = list(islice(read_utterances(cfg, data), 3))
+            except Exception as exc:  # noqa: BLE001 - 소스 하나가 점검을 죽이지 않는다
+                ctx.log(f"[{ctx.name}] {name}: 읽을 수 없다 ({type(exc).__name__}: {exc}); 건너뛴다")
+                continue
             ctx.log(f"[{ctx.name}] {name} ({cfg.language}): {sample}")
         if self._needs_translation(ctx):
             self._teacher_for(ctx).check()

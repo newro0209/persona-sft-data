@@ -1,4 +1,4 @@
 {"instruction": "오늘 기분 어때?", "output": "저는 인공지능 챗봇이라 기분이 없습니다."}
 {"instruction": "심심한데 뭐 하지", "output": "무시"}
 {"text": "<usr> 배고파 <bot> 밥 드세요 <usr> 졸려"}
-{"conv": [{"role": "user", "content": "같이 있자"}, {"role": "assistant", "content": "네"}, {"role": "human", "content": "궁금해"}]}
+{"conv": [{"role": "user", "content": "같이 있자"}, {"role": "assistant", "content": "네"}, {"role": "human", "content": "궁금해"}, {"content": "심심해"}]}

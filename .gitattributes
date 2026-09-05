@@ -6,3 +6,18 @@
 
 # Same reasoning for anything else read by a POSIX interpreter.
 *.bash text eol=lf
+
+# 나머지 텍스트도 LF로 고정한다. 이 저장소의 매니페스트는 페르소나 문서와 산출물의
+# sha256을 적어 재현을 보증하는데, core.autocrlf=true인 윈도우에서 personas/*.md가
+# CRLF로 체크아웃되면 내용이 같은데도 persona_sha256이 리눅스와 달라진다. 데이터
+# 파일(jsonl·tsv·csv·txt)과 설정(json)도 같은 이유로, 코드(py·ps1)는 진단·해시가
+# 플랫폼마다 갈리지 않도록 함께 고정한다.
+*.md text eol=lf
+*.json text eol=lf
+*.jsonl text eol=lf
+*.txt text eol=lf
+*.tsv text eol=lf
+*.csv text eol=lf
+*.py text eol=lf
+*.ps1 text eol=lf
+*.toml text eol=lf
