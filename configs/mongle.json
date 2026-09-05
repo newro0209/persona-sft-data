@@ -1,66 +1,88 @@
 {
+  "profile": "companion",
+  "language": "ko",
   "data_root": "data",
-  "seed": 20260904,
+  "datasets_root": "datasets",
+  "seed": 20260905,
   "persona_doc": "personas/mongle.md",
+  "plugins": [],
+
+  "student": {
+    "model": "kakaocorp/kanana-2-1.3b-base",
+    "trust_remote_code": true,
+    "chat_template": "chatml"
+  },
+
   "teachers": {
     "reasoner": {
+      "kind": "openai",
       "model": "NotoriousH2/kanana-2-30b-a3b-instruct-2601-awq-w4a16",
       "base_url": "http://localhost:8000",
-      "temperature": 1.0,
-      "top_p": 0.95,
-      "max_tokens": 320,
-      "concurrency": 200
+      "temperature": 1.0, "top_p": 0.95, "max_tokens": 320, "concurrency": 200
     },
     "bulk": {
+      "kind": "openai",
       "model": "kakaocorp/kanana-2-3b-instruct",
       "base_url": "http://localhost:8000",
-      "temperature": 1.05,
-      "top_p": 0.95,
-      "max_tokens": 256,
-      "concurrency": 256
+      "temperature": 0.9, "top_p": 0.95, "max_tokens": 128, "concurrency": 256
     }
   },
+
+  "sources": {
+    "smilestyle": {
+      "format": "tsv",
+      "url": "https://raw.githubusercontent.com/smilegate-ai/korean_smile_style_dataset/main/smilestyle_dataset.tsv",
+      "fields": ["informal", "chat"],
+      "language": "ko", "license": "smilestyle"
+    },
+    "korean_safe_conversation": {
+      "format": "parquet",
+      "url": "https://huggingface.co/datasets/jojo0217/korean_safe_conversation/resolve/refs%2Fconvert%2Fparquet/default/train/0000.parquet",
+      "fields": ["instruction"],
+      "language": "ko", "license": "apache-2.0"
+    },
+    "open_korean_instructions": {
+      "format": "parquet",
+      "url": "https://huggingface.co/datasets/heegyu/open-korean-instructions/resolve/refs%2Fconvert%2Fparquet/default/train/0000.parquet",
+      "fields": ["text"],
+      "extract": {"kind": "regex", "pattern": "<usr>\\s*(.*?)\\s*(?=<bot>|<usr>|<sys>|$)"},
+      "language": "ko", "license": "mit"
+    },
+    "korean_role_playing": {
+      "format": "parquet",
+      "url": "https://huggingface.co/datasets/huggingface-KREW/korean-role-playing/resolve/refs%2Fconvert%2Fparquet/general-roleplay-data/train/0000.parquet",
+      "fields": ["text"],
+      "extract": {"kind": "conversation", "role_key": "role", "content_key": "content",
+                  "exclude_roles": ["assistant", "bot", "character", "system"]},
+      "language": "ko", "license": "apache-2.0"
+    },
+    "soda": {
+      "format": "parquet",
+      "url": "https://huggingface.co/datasets/allenai/soda/resolve/refs%2Fconvert%2Fparquet/default/validation/0000.parquet",
+      "fields": ["dialogue"],
+      "extract": {"kind": "list", "keep": "even"},
+      "language": "en", "license": "cc-by-4.0"
+    }
+  },
+
   "stages": {
-    "seed": {
-      "teacher": "reasoner",
-      "per_situation": 2000,
-      "turns": [
-        2,
-        3,
-        4
-      ]
+    "ingest": {
+      "teacher": "bulk", "translator": "teacher",
+      "sources": ["smilestyle", "korean_safe_conversation", "open_korean_instructions",
+                  "korean_role_playing", "soda"],
+      "limit_per_source": 3000, "min_chars": 2, "max_chars": 60,
+      "topic_min_hits": 1, "download_timeout": 60
     },
-    "expand": {
-      "teacher": "bulk",
-      "variants_per_seed": 3
-    },
-    "real": {
-      "teacher": "bulk",
-      "limit": 300000
-    },
-    "template": {
-      "limit": 250000
-    },
-    "filter": {
-      "min_utterance_chars": 2,
-      "max_identical_pet_turns": 5000
-    },
-    "assemble": {
-      "target_tokens": 24000000,
-      "ratios": {
-        "teacher": 0.7,
-        "real": 0.15,
-        "template": 0.15
-      },
-      "split": {
-        "train": 0.94,
-        "val": 0.03,
-        "test": 0.03
-      },
-      "chars_per_token_estimate": 1.8806
-    },
+    "dialogue": {"teacher": "reasoner", "per_situation": 40, "turns": [2, 3, 4]},
+    "respond":  {"teacher": "bulk", "limit": 4000},
+    "filter":   {"max_identical_assistant_turns": 20, "min_turns": 2, "max_turns": 16},
+    "assemble": {"ratios": {"dialogue": 0.7, "respond": 0.3}, "max_sessions": 8000,
+                 "split": {"train": 0.9, "val": 0.05, "test": 0.05}},
     "export": {
-      "name": "mongle-v1"
+      "name": "mongle-peft-v1",
+      "recipe": {"kind": "llamafactory", "lora_rank": 16, "lora_alpha": 32,
+                 "learning_rate": 2e-4, "epochs": 3, "cutoff_len": "auto",
+                 "batch_size": 8, "gradient_accumulation": 2}
     }
   }
 }

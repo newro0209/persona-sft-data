@@ -1,64 +1,27 @@
 {
+  "profile": "companion",
+  "language": "ko",
   "data_root": "data/smoke",
-  "seed": 20260904,
+  "datasets_root": "datasets",
+  "seed": 20260905,
   "persona_doc": "personas/mongle.md",
+  "plugins": [],
+  "student": {"model": "kakaocorp/kanana-2-1.3b-base", "trust_remote_code": true, "chat_template": "chatml"},
   "teachers": {
-    "reasoner": {
-      "model": "teacher",
-      "base_url": "http://localhost:8000",
-      "temperature": 1.0,
-      "top_p": 0.95,
-      "max_tokens": 320,
-      "concurrency": 200
-    },
-    "bulk": {
-      "model": "teacher",
-      "base_url": "http://localhost:8000",
-      "temperature": 1.05,
-      "top_p": 0.95,
-      "max_tokens": 256,
-      "concurrency": 256
-    }
+    "reasoner": {"kind": "fake", "model": "fake-reasoner", "base_url": "http://localhost:8000", "concurrency": 8},
+    "bulk": {"kind": "fake", "model": "fake-bulk", "base_url": "http://localhost:8000", "concurrency": 8}
+  },
+  "sources": {
+    "fixture_ko": {"format": "tsv", "path": "tests/fixtures/utterances.tsv", "fields": ["informal", "chat"], "language": "ko", "license": "smilestyle"},
+    "fixture_en": {"format": "jsonl", "path": "tests/fixtures/english.jsonl", "fields": ["dialog"],
+                   "extract": {"kind": "list", "keep": "even"}, "language": "en", "license": "cc-by-4.0"}
   },
   "stages": {
-    "seed": {
-      "teacher": "reasoner",
-      "per_situation": 1,
-      "turns": [
-        2,
-        3,
-        4
-      ]
-    },
-    "expand": {
-      "teacher": "bulk",
-      "variants_per_seed": 2
-    },
-    "real": {
-      "teacher": "bulk",
-      "limit": 40
-    },
-    "template": {
-      "limit": 60
-    },
-    "filter": {
-      "min_utterance_chars": 2
-    },
-    "assemble": {
-      "target_tokens": 20000,
-      "ratios": {
-        "teacher": 0.7,
-        "real": 0.15,
-        "template": 0.15
-      },
-      "split": {
-        "train": 0.98,
-        "val": 0.01,
-        "test": 0.01
-      }
-    },
-    "export": {
-      "name": "smoke"
-    }
+    "ingest": {"teacher": "bulk", "sources": ["fixture_ko", "fixture_en"], "limit_per_source": 50},
+    "dialogue": {"teacher": "reasoner", "per_situation": 1, "turns": [2, 3]},
+    "respond": {"teacher": "bulk", "limit": 40},
+    "filter": {"max_identical_assistant_turns": 20},
+    "assemble": {"ratios": {"dialogue": 0.7, "respond": 0.3}, "max_sessions": 60, "split": {"train": 0.8, "val": 0.1, "test": 0.1}},
+    "export": {"name": "smoke", "recipe": {"kind": "llamafactory", "lora_rank": 8, "cutoff_len": "auto"}}
   }
 }

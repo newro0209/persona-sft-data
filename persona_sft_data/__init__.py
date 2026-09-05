@@ -1,2 +1,1 @@
-"""P1 Korean conversation corpus generation and filtering."""
-
+"""페르소나 문서와 교사 모델로 PEFT 미세조정 데이터셋과 레시피를 만드는 도구."""
