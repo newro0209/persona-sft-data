@@ -12,6 +12,9 @@ import importlib
 
 BUILTIN_MODULES: tuple[str, ...] = (
     "persona_sft_data.rules",
+    "persona_sft_data.teacher.openai_compat",
+    "persona_sft_data.teacher.fake",
+    "persona_sft_data.profiles",
 )
 
 _loaded = False

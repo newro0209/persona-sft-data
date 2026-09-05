@@ -60,7 +60,8 @@ def _plugins():
     STAGES.add("gen", GenStage, origin="plugins")
     STAGES.add("ingest", IngestLike, origin="plugins")
     STAGES.add("assemble", MixStage, origin="plugins")
-    TEACHERS.add("fake", FakeTeacherFactory(), origin="plugins")
+    if "fake" not in TEACHERS.names():  # 내장 fake가 있으면 그것을 쓴다 (test_runner와 같은 규칙)
+        TEACHERS.add("fake", FakeTeacherFactory(), origin="plugins")
     TRANSLATORS.add("teacher", FakeTranslatorFactory(), origin="plugins")
 
 
