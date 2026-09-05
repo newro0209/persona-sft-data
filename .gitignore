@@ -1,0 +1,14 @@
+# Generated data. Reproduce with `python -m persona_sft_data run --config configs/<persona>.json`.
+data/
+# Exported datasets are the product but 400MB of JSONL; publish them, do not commit them.
+datasets/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv*/
+*.egg-info/
+build/
+
+# SDD workspace
+.superpowers/

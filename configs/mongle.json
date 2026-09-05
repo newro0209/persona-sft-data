@@ -1,0 +1,66 @@
+{
+  "data_root": "data",
+  "seed": 20260904,
+  "persona_doc": "personas/mongle.md",
+  "teachers": {
+    "reasoner": {
+      "model": "NotoriousH2/kanana-2-30b-a3b-instruct-2601-awq-w4a16",
+      "base_url": "http://localhost:8000",
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "max_tokens": 320,
+      "concurrency": 200
+    },
+    "bulk": {
+      "model": "kakaocorp/kanana-2-3b-instruct",
+      "base_url": "http://localhost:8000",
+      "temperature": 1.05,
+      "top_p": 0.95,
+      "max_tokens": 256,
+      "concurrency": 256
+    }
+  },
+  "stages": {
+    "seed": {
+      "teacher": "reasoner",
+      "per_situation": 2000,
+      "turns": [
+        2,
+        3,
+        4
+      ]
+    },
+    "expand": {
+      "teacher": "bulk",
+      "variants_per_seed": 3
+    },
+    "real": {
+      "teacher": "bulk",
+      "limit": 300000
+    },
+    "template": {
+      "limit": 250000
+    },
+    "filter": {
+      "min_utterance_chars": 2,
+      "max_identical_pet_turns": 5000
+    },
+    "assemble": {
+      "target_tokens": 24000000,
+      "ratios": {
+        "teacher": 0.7,
+        "real": 0.15,
+        "template": 0.15
+      },
+      "split": {
+        "train": 0.94,
+        "val": 0.03,
+        "test": 0.03
+      },
+      "chars_per_token_estimate": 1.8806
+    },
+    "export": {
+      "name": "mongle-v1"
+    }
+  }
+}

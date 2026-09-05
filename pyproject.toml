@@ -1,0 +1,30 @@
+[project]
+name = "persona-sft-data"
+version = "0.1.0"
+description = "Generate persona fine-tuning datasets for LLMs from one persona document and a teacher model"
+readme = "README.md"
+requires-python = ">=3.12"
+# The pipeline itself is standard library only: the teacher is reached over
+# urllib, records are JSONL, and the gates are regular expressions. That is
+# deliberate -- see docs/pipeline-design.md.
+dependencies = []
+
+[project.optional-dependencies]
+# The `real` stage reads public Korean conversation datasets through their
+# parquet exports. Only needed if that stage is enabled in the config.
+real = ["pyarrow>=15"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+persona-sft-data = "persona_sft_data.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["persona_sft_data*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

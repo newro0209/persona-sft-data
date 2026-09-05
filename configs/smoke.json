@@ -1,0 +1,64 @@
+{
+  "data_root": "data/smoke",
+  "seed": 20260904,
+  "persona_doc": "personas/mongle.md",
+  "teachers": {
+    "reasoner": {
+      "model": "teacher",
+      "base_url": "http://localhost:8000",
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "max_tokens": 320,
+      "concurrency": 200
+    },
+    "bulk": {
+      "model": "teacher",
+      "base_url": "http://localhost:8000",
+      "temperature": 1.05,
+      "top_p": 0.95,
+      "max_tokens": 256,
+      "concurrency": 256
+    }
+  },
+  "stages": {
+    "seed": {
+      "teacher": "reasoner",
+      "per_situation": 1,
+      "turns": [
+        2,
+        3,
+        4
+      ]
+    },
+    "expand": {
+      "teacher": "bulk",
+      "variants_per_seed": 2
+    },
+    "real": {
+      "teacher": "bulk",
+      "limit": 40
+    },
+    "template": {
+      "limit": 60
+    },
+    "filter": {
+      "min_utterance_chars": 2
+    },
+    "assemble": {
+      "target_tokens": 20000,
+      "ratios": {
+        "teacher": 0.7,
+        "real": 0.15,
+        "template": 0.15
+      },
+      "split": {
+        "train": 0.98,
+        "val": 0.01,
+        "test": 0.01
+      }
+    },
+    "export": {
+      "name": "smoke"
+    }
+  }
+}
