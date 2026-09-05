@@ -23,6 +23,8 @@ BUILTIN_MODULES: tuple[str, ...] = (
     "persona_sft_data.stages.respond",
     "persona_sft_data.stages.filter",
     "persona_sft_data.stages.assemble",
+    "persona_sft_data.recipes.llamafactory",
+    "persona_sft_data.stages.export",
 )
 
 _loaded = False
