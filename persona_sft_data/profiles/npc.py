@@ -22,4 +22,4 @@ PROFILE = ProfileSpec(
     situations_hint=("첫 조우, 인사, 작별", "퀘스트 제안, 보상 설명, 거절", "거래, 흥정, 물건 설명",
                      "지명·인물·역사 질문", "적대, 경계, 화해", "재방문, 안부"),
 )
-PROFILES.add("npc", PROFILE, origin="builtin")
+PROFILES.add("npc", PROFILE, origin="builtin", path=f"{__name__}:PROFILE")

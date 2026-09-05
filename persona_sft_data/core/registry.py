@@ -65,7 +65,15 @@ class Registry(Generic[T]):
 
         return decorate
 
-    def add(self, name: str, obj: Any, *, origin: str) -> None:
+    def add(self, name: str, obj: Any, *, origin: str, path: str | None = None) -> None:
+        """이름 하나를 등록한다. ``path``는 표에 찍히는 '어디에 정의됐는지'다.
+
+        주지 않으면 객체의 클래스에서 ``모듈:클래스``로 만든다 — 클래스를 넘기는
+        데코레이터 쪽에서는 그것이 정확하다. 하지만 모듈 수준 인스턴스(프로필의
+        ``PROFILE``처럼 dataclass 인스턴스)를 넘기면 ``type(obj)``가 정의 모듈로
+        붕괴해 다섯 프로필이 모두 ``profiles.base:ProfileSpec``으로 보인다. 그런
+        등록은 ``path=f"{__name__}:PROFILE"``처럼 실제 위치를 직접 준다.
+        """
         if origin not in ORIGIN_RANK:
             raise PluginError(
                 f"{self.group}: 알 수 없는 출처 {origin!r} (허용: {sorted(ORIGIN_RANK)})"
@@ -78,10 +86,12 @@ class Registry(Generic[T]):
             if ORIGIN_RANK[origin] > ORIGIN_RANK[current.origin]:
                 return  # 우선순위가 낮은 쪽은 덮어쓰지 못한다.
         instance = obj() if isinstance(obj, type) else obj
-        cls = obj if isinstance(obj, type) else type(obj)
-        # 경로는 ``모듈:클래스`` 꼴이다. ``__qualname__``은 함수 안에서 정의한 클래스에
-        # ``<locals>``를 끼워 넣으므로 ``__name__``을 쓴다.
-        self._items[name] = Registration(name, instance, origin, f"{cls.__module__}:{cls.__name__}")
+        if path is None:
+            cls = obj if isinstance(obj, type) else type(obj)
+            # 경로는 ``모듈:클래스`` 꼴이다. ``__qualname__``은 함수 안에서 정의한 클래스에
+            # ``<locals>``를 끼워 넣으므로 ``__name__``을 쓴다.
+            path = f"{cls.__module__}:{cls.__name__}"
+        self._items[name] = Registration(name, instance, origin, path)
 
     # -- 발견 ---------------------------------------------------------------
 
@@ -99,7 +109,8 @@ class Registry(Generic[T]):
                 raise PluginError(
                     f"{self.group}: entry point {ep.name!r} ({ep.value}) 로드 실패: {exc}"
                 ) from exc
-            self.add(ep.name, obj, origin="entry_point")
+            # entry point는 선언된 값 자체가 정확한 경로다 — 객체에서 되짚지 않는다.
+            self.add(ep.name, obj, origin="entry_point", path=ep.value)
 
     # -- 조회 ---------------------------------------------------------------
 

@@ -1,5 +1,7 @@
 """respond: ingest의 발화마다 교사가 한 줄 답하고, 출처 필드가 레코드로 옮겨진다."""
-from persona_sft_data.core.config import PipelineConfig
+import pytest
+
+from persona_sft_data.core.config import ConfigError, PipelineConfig
 from persona_sft_data.core.runner import execute
 from persona_sft_data.core.schema import read_jsonl, write_jsonl
 from persona_sft_data.stages.respond import RespondStage
@@ -61,3 +63,12 @@ def test_missing_ingest_output_says_which_stage_to_run(tmp_path):
         assert "'ingest'" in str(exc)
     else:
         raise AssertionError("FileNotFoundError expected")
+
+
+def test_a_negative_limit_is_a_config_error_at_load_time(tmp_path):
+    """0은 '한도 없음'이라 허용한다. -1은 ``if limit and ...``가 조용히 무시하므로 막는다."""
+    assert _config(tmp_path, limit=0).stage_settings("respond").limit == 0
+    with pytest.raises(ConfigError, match="stages.respond.limit.*0 이상"):
+        _config(tmp_path, limit=-1)
+    with pytest.raises(ConfigError, match="stages.respond.limit.*정수"):
+        _config(tmp_path, limit="많이")

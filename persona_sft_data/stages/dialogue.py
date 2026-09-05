@@ -12,23 +12,11 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from persona_sft_data.core.config import ConfigError
+from persona_sft_data.core.config import ConfigError, require_int
 from persona_sft_data.core.registry import STAGES, TEACHERS
 from persona_sft_data.core.runner import StageContext, metric
 from persona_sft_data.teacher import prompts
 from persona_sft_data.teacher.base import Request, batched
-
-
-def _positive(where: str, value: Any) -> int:
-    """설정 값을 1 이상의 정수로. 어긋나면 ``ConfigError``다 — 맨 ``ValueError``는
-    CLI가 잡지 않아 사용자가 트레이스백을 본다."""
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        raise ConfigError(f"{where}는 정수여야 한다: {value!r}") from None
-    if number < 1:
-        raise ConfigError(f"{where}는 1 이상이어야 한다: {value!r}")
-    return number
 
 
 @dataclass(frozen=True)
@@ -42,7 +30,7 @@ class DialogueSettings:
 
         frozen dataclass라 고쳐 담지는 않고 검증만 한다.
         """
-        _positive("stages.dialogue.per_situation", self.per_situation)
+        require_int("stages.dialogue.per_situation", self.per_situation, minimum=1)
         if self.turns is None:
             return
         if isinstance(self.turns, (str, bytes)) or not isinstance(self.turns, Sequence):
@@ -50,7 +38,7 @@ class DialogueSettings:
         if not self.turns:
             raise ConfigError("stages.dialogue.turns가 비어 있다 (프로필 기본값을 쓰려면 키를 빼라)")
         for turn in self.turns:
-            _positive("stages.dialogue.turns의 각 항목", turn)
+            require_int("stages.dialogue.turns의 각 항목", turn, minimum=1)
 
 
 @STAGES.register("dialogue", origin="builtin")

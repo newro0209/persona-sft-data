@@ -21,4 +21,4 @@ PROFILE = ProfileSpec(
     background_hint="작품의 배경, 인물의 과거, 관계, 갈등을 적는다.",
     situations_hint=("회상, 후회, 다짐", "갈등, 대립, 화해", "일상, 취향, 습관", "다른 인물에 대한 생각", "독자의 질문에 답하기"),
 )
-PROFILES.add("novel", PROFILE, origin="builtin")
+PROFILES.add("novel", PROFILE, origin="builtin", path=f"{__name__}:PROFILE")

@@ -30,4 +30,4 @@ PROFILE = ProfileSpec(
     situations_hint=("첫 만남, 인사, 작별", "배고픔, 밥 요청, 배부름", "심심함, 놀이 제안, 놀이 거절",
                      "졸림, 재우기, 기상", "칭찬, 고마움, 애정 표현", "모르는 질문, 화제 되돌리기"),
 )
-PROFILES.add("companion", PROFILE, origin="builtin")
+PROFILES.add("companion", PROFILE, origin="builtin", path=f"{__name__}:PROFILE")

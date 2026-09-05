@@ -61,7 +61,10 @@ def test_check_run_export_end_to_end(smoke, capsys, monkeypatch):
     corpus = json.loads((cfg.data_root / "final" / "manifest.json").read_text(encoding="utf-8"))
     raw_produced = corpus["stages"]["raw/dialogue"]["produced"]
     assert corpus["stages"]["filtered/dialogue"]["produced"] >= raw_produced / 2
-    assert "dialogue" not in corpus["shortfall"]
+    # shortfall이 비어야 한다. 'dialogue만 없으면 된다'로 두면 smoke.json의 max_sessions가
+    # 픽스처 규모보다 커서 respond가 늘 모자라는 상태를 통과시킨다 — 스모크는 정상 실행이
+    # 어떤 모습인지 보여 주는 것이므로, 상한도 실제 가용량에 맞아야 한다.
+    assert corpus["shortfall"] == {}, corpus["shortfall"]
     assert cli.main(["export", "--config", str(smoke), "--name", "smoke2"]) == 0
     assert (cfg.datasets_root / "smoke2" / "train.jsonl").exists()
 
@@ -173,3 +176,58 @@ def test_a_plugin_module_that_cannot_be_imported_exits_2(tmp_path, capsys):
     assert cli.main(["check", "--config", str(config)]) == 2
     err = capsys.readouterr().err
     assert "설정 오류" in err and "SyntaxError" in err
+
+
+BOOM_PLUGIN = '''"""preflight가 예상 밖 예외를 던지는 단계 플러그인."""
+from dataclasses import dataclass
+
+from persona_sft_data.core.registry import STAGES
+
+
+@dataclass(frozen=True)
+class BoomSettings:
+    pass
+
+
+@STAGES.register("boom", origin="plugins")
+class BoomStage:
+    name = config_name = "boom"
+    mode, record_kind, produces = "records", "utterance", "raw"
+    settings_type = BoomSettings
+
+    def requires(self, config):
+        return ()
+
+    def instances(self, config):
+        return [self]
+
+    def preflight(self, ctx):
+        raise RuntimeError("예상 밖으로 터졌다")
+
+    def run(self, ctx):
+        return iter(())
+'''
+
+
+def test_check_reports_an_unexpected_preflight_failure_and_keeps_going(tmp_path, capsys, monkeypatch):
+    """``check``의 계약은 '단계마다 OK/FAILED, 하나라도 실패면 종료 1'이다.
+
+    예상한 예외만 잡으면 플러그인 단계의 preflight가 던지는 아무 예외 하나가
+    트레이스백(종료 1)으로 나머지 단계 점검을 통째로 앗아간다.
+    """
+    from persona_sft_data.stages import export as export_mod
+    monkeypatch.setattr(export_mod, "_load_tokenizer", lambda student: None)
+    (tmp_path / "boom_plugin.py").write_text(BOOM_PLUGIN, encoding="utf-8")
+    raw = _smoke_raw(tmp_path)
+    raw["plugins"] = ["boom_plugin"]
+    raw["stages"] = {"boom": {}, **raw["stages"]}
+    config = _write(tmp_path, raw, "boom")
+    try:
+        assert cli.main(["check", "--config", str(config)]) == 1
+        out = capsys.readouterr().out
+        assert "stage     : boom FAILED" in out
+        assert "RuntimeError: 예상 밖으로 터졌다" in out       # 예외형까지 적어야 원인을 찾는다
+        for name in ("ingest", "dialogue", "respond", "filter", "assemble", "export"):
+            assert f"stage     : {name} OK" in out, name      # 나머지 점검은 이어진다
+    finally:
+        sys.modules.pop("boom_plugin", None)

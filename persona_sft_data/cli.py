@@ -94,12 +94,16 @@ class Check(Command):
         print(f"data_root : {config.data_root}")
         ok = True
         for stage in ordered_stages(config):
-            ctx = runner.build_context(stage, config)
+            # check의 계약은 '단계마다 OK/FAILED를 보고하고 하나라도 실패면 종료 1'이다.
+            # 예상한 예외만 잡으면 플러그인 단계의 preflight가 던지는 아무 예외 하나가
+            # 트레이스백으로 나머지 단계 점검을 통째로 앗아간다. KeyboardInterrupt·
+            # SystemExit은 Exception이 아니므로 자동으로 빠진다.
             try:
+                ctx = runner.build_context(stage, config)
                 stage.preflight(ctx)
                 print(f"stage     : {stage.name} OK")
-            except (TeacherError, ConfigError, PersonaError, FileNotFoundError) as exc:
-                print(f"stage     : {stage.name} FAILED\n  {exc}")
+            except Exception as exc:  # noqa: BLE001 - 어떤 실패든 그 단계만 FAILED다
+                print(f"stage     : {stage.name} FAILED\n  {type(exc).__name__}: {exc}")
                 ok = False
         return 0 if ok else 1
 

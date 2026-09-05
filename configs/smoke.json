@@ -21,7 +21,7 @@
     "dialogue": {"teacher": "reasoner", "per_situation": 1, "turns": [2, 3]},
     "respond": {"teacher": "bulk", "limit": 40},
     "filter": {"max_identical_assistant_turns": 20},
-    "assemble": {"ratios": {"dialogue": 0.7, "respond": 0.3}, "max_sessions": 60, "split": {"train": 0.8, "val": 0.1, "test": 0.1}},
+    "assemble": {"ratios": {"dialogue": 0.7, "respond": 0.3}, "max_sessions": 20, "split": {"train": 0.8, "val": 0.1, "test": 0.1}},
     "export": {"name": "smoke", "recipe": {"kind": "llamafactory", "lora_rank": 8, "cutoff_len": "auto"}}
   }
 }

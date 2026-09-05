@@ -71,6 +71,32 @@ def test_entry_points_are_discovered_lazily(monkeypatch):
     r: Registry[str] = Registry("test.group")
     assert r.get("from_ep") == "loaded"
     assert [d.origin for d in r.describe()] == ["entry_point"]
+    assert [d.path for d in r.describe()] == ["somewhere:Thing"]   # 선언된 값이 경로다
+
+
+def test_add_uses_the_given_path_instead_of_deriving_it_from_the_object():
+    """모듈 수준 인스턴스는 ``type(obj)``가 정의 모듈로 붕괴하므로 경로를 직접 준다."""
+    r: Registry[object] = Registry("test.group")
+    obj = object()
+    r.add("given", obj, origin="builtin", path="pkg.mod:THING")
+    r.add("derived", obj, origin="builtin")
+    described = {d.name: d.path for d in r.describe()}
+    assert described["given"] == "pkg.mod:THING"
+    assert described["derived"] == "builtins:object"                # 안 주면 클래스에서 만든다
+
+
+def test_each_profile_is_registered_at_its_own_module_path():
+    """표의 목적은 '어디에 정의됐는지 찾기'다.
+
+    프로필은 클래스가 아니라 각 모듈의 ``PROFILE`` 인스턴스라서, 객체에서 경로를
+    되짚으면 다섯 줄이 모두 정의 모듈인 ``profiles.base:ProfileSpec``으로 붕괴한다.
+    """
+    paths = {d.name: d.path for d in reg.PROFILES.describe()}
+    for name in ("companion", "lore", "novel", "npc", "trpg"):
+        assert paths[name] == f"persona_sft_data.profiles.{name}:PROFILE", (name, paths[name])
+    five = [paths[n] for n in ("companion", "lore", "novel", "npc", "trpg")]
+    assert len(set(five)) == 5                                      # 서로 다르다
+    assert not any(p.endswith(":ProfileSpec") for p in five)
 
 
 def test_load_plugins_imports_modules_that_register_themselves(tmp_path, monkeypatch):

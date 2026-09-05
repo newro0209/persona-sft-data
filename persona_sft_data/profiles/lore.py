@@ -21,4 +21,4 @@ PROFILE = ProfileSpec(
     background_hint="지리, 세력, 인물, 연대기, 마법이나 기술의 규칙을 적는다.",
     situations_hint=("지명, 지리, 기후", "인물, 세력, 관계", "역사, 사건, 연대", "규칙, 마법, 기술", "모르는 질문"),
 )
-PROFILES.add("lore", PROFILE, origin="builtin")
+PROFILES.add("lore", PROFILE, origin="builtin", path=f"{__name__}:PROFILE")

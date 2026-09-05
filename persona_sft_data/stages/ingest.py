@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from itertools import islice
 from typing import Any
 
+from persona_sft_data.core.config import ConfigError, require_int, require_number
 from persona_sft_data.core.registry import STAGES, TEACHERS, TRANSLATORS
 from persona_sft_data.core.runner import StageContext, metric
 from persona_sft_data.core.schema import normalize_text
@@ -34,6 +35,24 @@ class IngestSettings:
     topic_min_hits: int = 1
     blocked_stems: tuple[str, ...] | None = None
     download_timeout: float = 60.0
+
+    def __post_init__(self) -> None:
+        """값도 로드 시점에 본다. 실행 중에 터지면 소스를 이미 다 내려받은 뒤다.
+
+        ``check``가 통과한 설정이 ``run``에서 조용히 아무것도 내지 않는 일이 없게
+        한다 — ``min_chars > max_chars``면 모든 발화가 길이 필터에 걸려 출력이 빈다.
+        """
+        if not self.sources:
+            raise ConfigError("stages.ingest.sources가 비어 있다 (읽을 소스 이름을 하나 이상 적는다)")
+        require_int("stages.ingest.limit_per_source", self.limit_per_source, minimum=1)
+        min_chars = require_int("stages.ingest.min_chars", self.min_chars, minimum=1)
+        max_chars = require_int("stages.ingest.max_chars", self.max_chars, minimum=1)
+        if min_chars > max_chars:
+            raise ConfigError(
+                f"stages.ingest.min_chars({min_chars})가 max_chars({max_chars})보다 크다 — 통과할 발화가 없다"
+            )
+        require_int("stages.ingest.topic_min_hits", self.topic_min_hits, minimum=0)
+        require_number("stages.ingest.download_timeout", self.download_timeout, minimum=0, exclusive=True)
 
 
 @STAGES.register("ingest", origin="builtin")

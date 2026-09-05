@@ -103,6 +103,42 @@ def test_references_must_exist(tmp_path):
         PipelineConfig.load(write_config(tmp_path, stages={"ingest": {"teacher": "fake", "translator": "none", "sources": []}}))
 
 
+def test_blocks_that_are_not_objects_are_config_errors_not_tracebacks(tmp_path):
+    """``dict("hello")``는 맨 ``ValueError``, ``"hello".items()``는 ``AttributeError``다.
+
+    ``cli.load_config``는 ``ConfigError``만 잡으므로 둘 다 한 줄 안내(종료 2) 대신
+    트레이스백(종료 1)이 된다.
+    """
+    for overrides, msg in (
+        ({"stages": {"gen": "hello"}}, r"stages\.gen: 객체여야 한다 \(받은 것: str\)"),
+        ({"stages": {"gen": ["teacher", "fake"]}}, r"stages\.gen.*받은 것: list"),
+        ({"stages": "hello"}, r"^stages: 객체여야 한다"),
+        ({"teachers": "hello"}, r"^teachers: 객체여야 한다"),
+        ({"teachers": {"fake": "hello"}}, r"teachers\.fake: 객체여야 한다"),
+        ({"sources": "hello"}, r"^sources: 객체여야 한다"),
+        ({"sources": {"s": "hello"}}, r"sources\.s: 객체여야 한다"),
+        ({"student": "hello"}, r"^student: 객체여야 한다"),
+    ):
+        # stages 자체를 덮어쓰는 경우가 아니면 gen 단계를 하나 둔다 (stages는 필수 키다).
+        base = {} if "stages" in overrides else {"stages": {"gen": {"teacher": "fake"}}}
+        with pytest.raises(ConfigError, match=msg):
+            PipelineConfig.load(write_config(tmp_path, **{**base, **overrides}))
+
+
+def test_a_config_file_that_is_not_an_object_is_a_config_error(tmp_path):
+    (tmp_path / "configs").mkdir(exist_ok=True)
+    path = tmp_path / "configs" / "list.json"
+    path.write_text('["not", "an", "object"]', encoding="utf-8")
+    with pytest.raises(ConfigError, match="객체여야 한다.*받은 것: list"):
+        PipelineConfig.load(path)
+
+
+def test_source_extract_must_be_an_object(tmp_path):
+    good = {"format": "tsv", "url": "http://x/a.tsv", "fields": ["a"], "language": "ko", "license": "mit"}
+    with pytest.raises(ConfigError, match=r"source 's'\.extract: 객체여야 한다"):
+        PipelineConfig.load(write_config(tmp_path, sources={"s": {**good, "extract": "field"}}))
+
+
 def test_teacher_config_defaults_and_unknown_keys():
     t = TeacherConfig.from_dict("t", {"model": "m", "base_url": "http://x"})
     assert t.kind == "openai" and t.concurrency == 64 and t.api_key is None

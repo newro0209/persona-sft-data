@@ -106,6 +106,14 @@ class XmlFormat:
 선언한다. 인터페이스는 `persona_sft_data/core/plugin.py`. 우선순위는 설정 `plugins` >
 entry point > 내장이다.
 
+`plugins` 명령이 그룹별로 이름·출처·정의 위치를 찍는다. 인자 없이 부르면 설치된 것
+(내장과 entry point)만 보이고, `--config`로 설정을 주면 그 설정의 `plugins` 목록을 먼저
+import 하므로 저장소에 둔 로컬 모듈이 `plugins` 출처로 함께 나온다.
+
+```
+persona-sft-data plugins --config configs/mongle.json
+```
+
 ## 명령
 
 | 명령 | 하는 일 |
@@ -115,7 +123,7 @@ entry point > 내장이다.
 | `export [--name N]` | assemble 결과에서 데이터셋·레시피만 |
 | `sources [--sample N] [--translate]` | 소스별 발화 표본 |
 | `status [--watch]` | 단계별 산출·거절 개수 |
-| `plugins` | 그룹별 등록 목록 |
+| `plugins [--config C]` | 그룹별 등록 목록 (이름·출처·정의 위치). `--config`를 주면 그 설정의 `plugins` 목록을 먼저 붙여 로컬 플러그인까지 보인다 |
 | `init <이름> [--profile P]` | 페르소나 문서와 설정 골격 |
 
 ## 교사 서버

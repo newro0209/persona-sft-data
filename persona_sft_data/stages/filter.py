@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
+from persona_sft_data.core.config import ConfigError, require_int
 from persona_sft_data.core.registry import STAGES
 from persona_sft_data.core.runner import StageContext, reject_record
 
@@ -19,6 +20,22 @@ class FilterSettings:
     max_identical_assistant_turns: int = 20
     min_turns: int = 2
     max_turns: int = 16
+
+    def __post_init__(self) -> None:
+        """값도 로드 시점에 본다. 어긋나면 모든 세션이 조용히 거절된다.
+
+        ``min_turns``의 하한이 2인 것은 세션 하나가 최소 user·assistant 한 쌍이라서다
+        (구조 규칙 ``StructureRule``이 같은 값을 쓴다).
+        """
+        require_int(
+            "stages.filter.max_identical_assistant_turns", self.max_identical_assistant_turns, minimum=1
+        )
+        min_turns = require_int("stages.filter.min_turns", self.min_turns, minimum=2)
+        max_turns = require_int("stages.filter.max_turns", self.max_turns, minimum=2)
+        if min_turns > max_turns:
+            raise ConfigError(
+                f"stages.filter.min_turns({min_turns})가 max_turns({max_turns})보다 크다 — 통과할 세션이 없다"
+            )
 
 
 @STAGES.register("filter", origin="builtin")

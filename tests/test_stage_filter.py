@@ -1,7 +1,7 @@
 """filter: raw 세션 파일마다 게이트를 다시 적용하고, 파일 전체를 봐야 하는 과다 반복만 여기서 거른다."""
 import pytest
 
-from persona_sft_data.core.config import PipelineConfig
+from persona_sft_data.core.config import ConfigError, PipelineConfig
 from persona_sft_data.core.runner import execute
 from persona_sft_data.core.schema import read_jsonl, write_jsonl
 from persona_sft_data.stages.filter import FilterStage
@@ -73,3 +73,16 @@ def test_no_raw_file_at_all_is_an_error_that_names_the_stages(tmp_path):
     cfg = _config(tmp_path)
     with pytest.raises(FileNotFoundError, match="dialogue"):
         FilterStage().instances(cfg)
+
+
+def test_bad_settings_are_config_errors_at_load_time(tmp_path):
+    """어긋난 값은 모든 세션을 조용히 거절한다 — 로드 시점에 알린다."""
+    for settings, msg in (
+        ({"max_identical_assistant_turns": 0}, "max_identical_assistant_turns.*1 이상"),
+        ({"max_identical_assistant_turns": "많이"}, "max_identical_assistant_turns.*정수"),
+        ({"min_turns": 1}, "min_turns.*2 이상"),
+        ({"max_turns": 1}, "max_turns.*2 이상"),
+        ({"min_turns": 8, "max_turns": 4}, "min_turns.*max_turns"),
+    ):
+        with pytest.raises(ConfigError, match=msg):
+            _config(tmp_path, **settings)

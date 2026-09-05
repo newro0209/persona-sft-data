@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from persona_sft_data.core.config import PipelineConfig
+from persona_sft_data.core.config import ConfigError, PipelineConfig
 from persona_sft_data.core.runner import execute
 from persona_sft_data.core.schema import read_jsonl, write_jsonl
 from persona_sft_data.stages.assemble import AssembleStage
@@ -99,3 +99,17 @@ def test_same_seed_same_selection_and_split(tmp_path):
     first = [(r["id"], r["split"]) for r in read_jsonl(cfg.final("assemble"))]
     execute(AssembleStage(), cfg, log=lambda m: None)
     assert first == [(r["id"], r["split"]) for r in read_jsonl(cfg.final("assemble"))]
+
+
+def test_bad_settings_are_config_errors_at_load_time(tmp_path):
+    """비율의 합은 ``validate_pipeline``이 보므로 여기서는 겹치지 않는다."""
+    with pytest.raises(ConfigError, match="max_sessions.*1 이상"):
+        _config(tmp_path, {"dialogue": 1.0}, max_sessions=0)
+    with pytest.raises(ConfigError, match="max_sessions.*정수"):
+        _config(tmp_path, {"dialogue": 1.0}, max_sessions="많이")
+    with pytest.raises(ConfigError, match=r"ratios\.respond.*0 이상"):
+        _config(tmp_path, {"dialogue": 1.5, "respond": -0.5})
+    with pytest.raises(ConfigError, match=r"ratios\.dialogue.*숫자"):
+        _config(tmp_path, {"dialogue": "절반"})
+    with pytest.raises(ConfigError, match=r"stages\.assemble\.ratios: 객체여야 한다"):
+        _config(tmp_path, "dialogue")

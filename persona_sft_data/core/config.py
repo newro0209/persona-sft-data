@@ -50,6 +50,53 @@ def build_settings(settings_type: type, raw: dict[str, Any], where: str) -> Any:
     return settings_type(**raw)
 
 
+def require_mapping(where: str, value: Any) -> dict[str, Any]:
+    """설정 블록이 객체(매핑)인지 보고 dict로 돌려준다. ``None``은 빈 dict다.
+
+    확인하지 않으면 ``dict("hello")``가 맨 ``ValueError``를, ``"hello".items()``가
+    ``AttributeError``를 던진다. ``cli.load_config``는 ``ConfigError``만 잡으므로
+    둘 다 한 줄 안내(종료 2) 대신 트레이스백(종료 1)이 된다.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ConfigError(f"{where}: 객체여야 한다 (받은 것: {type(value).__name__})")
+    return dict(value)
+
+
+def require_int(where: str, value: Any, *, minimum: int) -> int:
+    """설정 값을 정수로 읽고 최솟값을 확인한다. 어긋나면 ``ConfigError``다.
+
+    맨 ``ValueError``·``TypeError``는 CLI가 잡지 않아 사용자가 트레이스백을 본다.
+    """
+    if isinstance(value, bool):    # bool은 int의 서브클래스라 조용히 0·1로 통과한다
+        raise ConfigError(f"{where}는 정수여야 한다: {value!r}")
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"{where}는 정수여야 한다: {value!r}") from None
+    if number < minimum:
+        raise ConfigError(f"{where}는 {minimum} 이상이어야 한다: {value!r}")
+    return number
+
+
+def require_number(where: str, value: Any, *, minimum: float, exclusive: bool = False) -> float:
+    """``require_int``의 실수 판. ``exclusive``면 최솟값 자체도 거절한다."""
+    if isinstance(value, bool):
+        raise ConfigError(f"{where}는 숫자여야 한다: {value!r}")
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"{where}는 숫자여야 한다: {value!r}") from None
+    if number != number:                                  # NaN은 어떤 비교도 통과한다
+        raise ConfigError(f"{where}는 숫자여야 한다: {value!r}")
+    if exclusive and number <= minimum:
+        raise ConfigError(f"{where}는 {minimum}보다 커야 한다: {value!r}")
+    if not exclusive and number < minimum:
+        raise ConfigError(f"{where}는 {minimum} 이상이어야 한다: {value!r}")
+    return number
+
+
 def _validate_recipe(stage_name: str, raw: dict[str, Any] | None) -> None:
     """단계 설정의 ``recipe``를 로드 시점에 검증한다.
 
@@ -122,7 +169,7 @@ class SourceConfig:
         language = str(raw["language"]).lower()
         if not _LANGUAGE.match(language):
             raise ConfigError(f"{where}: language는 ISO 639-1 두 글자여야 한다: {language!r}")
-        extract = dict(raw.get("extract") or {})
+        extract = require_mapping(f"{where}.extract", raw.get("extract"))
         kind = str(extract.pop("kind", "field"))
         return cls(
             name=name, format=str(raw["format"]), language=language, license=str(raw["license"]),
@@ -257,7 +304,7 @@ class PipelineConfig:
         path = Path(path).resolve()
         if not path.exists():
             raise ConfigError(f"설정 파일이 없다: {path}")
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = require_mapping(f"설정 {path}", json.loads(path.read_text(encoding="utf-8")))
         # 상대 경로는 설정 파일의 부모의 부모(저장소 루트)를 기준으로 푼다.
         root = path.parent.parent
         for key in ("profile", "language", "data_root", "seed", "persona_doc", "student", "teachers", "stages"):
@@ -276,13 +323,21 @@ class PipelineConfig:
         if not _LANGUAGE.match(language):
             raise ConfigError(f"language는 ISO 639-1 두 글자여야 한다: {language!r}")
 
-        teachers = {n: TeacherConfig.from_dict(n, spec) for n, spec in raw["teachers"].items()}
+        # 각 블록도 매핑인지 먼저 본다. 아니면 ``.items()``·``dict(...)``가 CLI가 잡지
+        # 않는 예외를 던져 한 줄 안내 대신 트레이스백이 된다.
+        teachers = {
+            n: TeacherConfig.from_dict(n, require_mapping(f"teachers.{n}", spec))
+            for n, spec in require_mapping("teachers", raw["teachers"]).items()
+        }
         for t in teachers.values():
             if t.kind not in TEACHERS.names():
                 raise ConfigError(
                     f"teacher {t.name!r}의 kind {t.kind!r}은(는) 등록되지 않았다 (있는 것: {TEACHERS.names()})"
                 )
-        sources = {n: SourceConfig.from_dict(n, spec, root) for n, spec in (raw.get("sources") or {}).items()}
+        sources = {
+            n: SourceConfig.from_dict(n, require_mapping(f"sources.{n}", spec), root)
+            for n, spec in require_mapping("sources", raw.get("sources")).items()
+        }
         for s in sources.values():
             if s.format not in FORMATS.names():
                 raise ConfigError(
@@ -300,12 +355,14 @@ class PipelineConfig:
             )
 
         stages: dict[str, Any] = {}
-        for name, spec in raw["stages"].items():
+        for name, spec in require_mapping("stages", raw["stages"]).items():
             try:
                 plugin = STAGES.get(name)
             except PluginError as exc:
                 raise ConfigError(f"stage {name!r}: {exc}") from None
-            settings = build_settings(plugin.settings_type, dict(spec or {}), f"stages.{name}")
+            settings = build_settings(
+                plugin.settings_type, require_mapping(f"stages.{name}", spec), f"stages.{name}"
+            )
             teacher = getattr(settings, "teacher", None)
             if teacher is not None and teacher not in teachers:
                 raise ConfigError(
@@ -330,6 +387,6 @@ class PipelineConfig:
             data_root=(root / raw["data_root"]).resolve(),
             datasets_root=(root / raw.get("datasets_root", "datasets")).resolve(),
             seed=int(raw["seed"]), persona_doc=(root / raw["persona_doc"]).resolve(),
-            plugins=plugins, student=StudentConfig.from_dict(dict(raw["student"])),
+            plugins=plugins, student=StudentConfig.from_dict(require_mapping("student", raw["student"])),
             teachers=teachers, sources=sources, stages=stages,
         )

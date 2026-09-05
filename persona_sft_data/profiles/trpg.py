@@ -21,4 +21,4 @@ PROFILE = ProfileSpec(
     background_hint="세계관, 현재 장면, 등장 NPC, 규칙 요약을 적는다.",
     situations_hint=("탐색, 발견, 함정", "전투 선언, 결과 묻기", "협상, 설득, 위협", "판정 요청, 난이도 안내", "휴식, 회복, 다음 목적지"),
 )
-PROFILES.add("trpg", PROFILE, origin="builtin")
+PROFILES.add("trpg", PROFILE, origin="builtin", path=f"{__name__}:PROFILE")

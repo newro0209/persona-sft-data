@@ -1,7 +1,9 @@
 """ingest: 소스마다 읽고, 싸게 거르고, 표집하고, 필요하면 번역하고, 주제·안전 필터를 건다."""
 import json
 
-from persona_sft_data.core.config import PipelineConfig
+import pytest
+
+from persona_sft_data.core.config import ConfigError, PipelineConfig
 from persona_sft_data.core.runner import build_context, execute
 from persona_sft_data.core.schema import read_jsonl, write_jsonl
 from persona_sft_data.stages.ingest import IngestStage
@@ -125,3 +127,26 @@ def test_same_seed_same_sample(tmp_path):
     first = [r["text"] for r in read_jsonl(_config(tmp_path).raw("ingest"))]
     b = execute(IngestStage(teacher=FakeTeacher(reply_fn=lambda r: "같이 놀자")), _config(tmp_path, limit_per_source=2), log=lambda m: None)
     assert first == [r["text"] for r in read_jsonl(_config(tmp_path).raw("ingest"))] and a.produced == b.produced
+
+
+def test_bad_settings_are_config_errors_at_load_time(tmp_path):
+    """``check``를 통과한 설정이 ``run``에서 조용히 빈 출력을 내는 일이 없어야 한다.
+
+    맨 ``ValueError``면 ``cli.load_config``가 잡지 않아 트레이스백(종료 1)이 된다.
+    """
+    for ingest, msg in (
+        ({"limit_per_source": 0}, "limit_per_source.*1 이상"),
+        ({"limit_per_source": "많이"}, "limit_per_source.*정수"),
+        ({"min_chars": 0}, "min_chars.*1 이상"),
+        ({"min_chars": 40, "max_chars": 10}, "min_chars.*max_chars"),
+        ({"topic_min_hits": -1}, "topic_min_hits.*0 이상"),
+        ({"download_timeout": 0}, "download_timeout.*0보다 커야"),
+        ({"download_timeout": -1.0}, "download_timeout.*0보다 커야"),
+    ):
+        with pytest.raises(ConfigError, match=msg):
+            _config(tmp_path, **ingest)
+
+
+def test_empty_sources_is_a_config_error(tmp_path):
+    with pytest.raises(ConfigError, match="stages.ingest.sources가 비어 있다"):
+        PipelineConfig.load(write_config(tmp_path, sources=_sources(), stages={"ingest": {"teacher": "fake", "sources": []}}))

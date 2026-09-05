@@ -654,9 +654,28 @@ yield 한다. `final/{train,val,test}.jsonl`과 `final/manifest.json`(설정 전
 
 `register`의 존댓말 쪽은 **허용 목록**이다: 반말 종결을 열거해 거절하는 것이 아니라,
 문장 끝이 존댓말 종결이 아니면 `informal_ending`으로 거절한다. 반말 종결은 수가
-많고 계속 늘어나므로 열거하는 쪽이 늘 뚫린다. 두 정규식(존댓말 표현·존댓말 종결)의
-실제 목록은 `rules/register.py`의 `HONORIFIC`·`HONORIFIC_END`가 단일 출처다 — 이
-표는 목록을 복사하지 않는다.
+많고 계속 늘어나므로 열거하는 쪽이 늘 뚫린다.
+
+판정에 쓰는 정규식은 `rules/register.py`의 셋이고, 그 파일이 단일 출처다 — 이 표와
+아래 설명은 목록을 복사하지 않는다.
+
+| 정규식 | 쓰는 쪽 | 역할 |
+| --- | --- | --- |
+| `HONORIFIC` | 반말 페르소나 (`InformalRule`) | 발화 어디든 존댓말 표현이 있으면 `honorific`으로 거절하는 **거절 목록** |
+| `HONORIFIC_END` | 존댓말 페르소나 (`HonorificRule`) | 발화 끝이 존댓말 종결인지 보는 **허용 목록**. 목록 자체는 `POLITE_ENDINGS`이고 `HONORIFIC_END`는 거기에 끝의 문장부호·닫는 따옴표를 무시하는 꼬리(`TRAILING`)를 붙인 것이다. 하십시오체·해요체 두 갈래를 담는다 |
+| `INTERJECTION_ONLY` | 존댓말 페르소나 (`HonorificRule`) | 종결어미가 없어 허용 목록에 걸리지 않는 세 번째 갈래를 구제한다. **발화 전체**가 감탄사와 단독 응답(`네` `예` `아니오` `음` …)만으로 돼 있을 때만 통과 |
+
+세 번째 패턴이 필요한 이유: `네.`·`아니오.`처럼 종결어미 없는 단독 응답은 정상
+존댓말인데 `HONORIFIC_END`에 걸리지 않아 `informal_ending`으로 거절되고, 그러면
+제약 표 기본 말투가 존댓말인 `npc`·`lore` 프로필의 수율이 구조적으로 깎인다. 그렇다고
+`네`로 끝나는 것을 전부 통과시키면 `재밌네`·`좋네` 같은 반말이 새므로, 이 갈래는
+발화 전체가 그 응답(과 감탄사)일 때만 인정한다 — 양끝을 다 묶는 앵커(`^`와 `TRAILING`의
+`$`)가 판정의 핵심이고, 그래서 `HONORIFIC_END`는 `search`로 끝만 보는데
+`INTERJECTION_ONLY`는 `match`로 처음부터 본다. 반말의 대답(`응` `어`)과 반말
+종결(`좋아` `그래` `했어`)은 `INTERJECTION`에 넣지 않는다.
+
+`HonorificRule`은 두 허용 판정을 OR로 묶는다(`HONORIFIC_END.search(text) or
+INTERJECTION_ONLY.match(text)`), 즉 존댓말 종결이거나 감탄사·단독 응답만이면 통과다.
 
 지금 `test_foundation.py`의 "실제 교사 출력에서 나온 위반" 케이스는 전부 그대로
 통과해야 한다(`mongle.md`의 제약 표가 같은 규칙을 켜므로).

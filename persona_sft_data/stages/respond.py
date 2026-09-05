@@ -11,6 +11,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
+from persona_sft_data.core.config import require_int
 from persona_sft_data.core.registry import STAGES, TEACHERS
 from persona_sft_data.core.runner import StageContext, metric
 from persona_sft_data.teacher import prompts
@@ -21,6 +22,14 @@ from persona_sft_data.teacher.base import Request, batched
 class RespondSettings:
     teacher: str
     limit: int = 4000
+
+    def __post_init__(self) -> None:
+        """값도 로드 시점에 본다. 0은 '한도 없음'이므로 허용하고 음수만 막는다.
+
+        ``run``의 ``if limit and len(...) > limit``는 -1을 조용히 무시하므로,
+        의도한 한도가 아무 효과도 없는 일이 없게 로드 시점에 알린다.
+        """
+        require_int("stages.respond.limit", self.limit, minimum=0)
 
 
 @STAGES.register("respond", origin="builtin")

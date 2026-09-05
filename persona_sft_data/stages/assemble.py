@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from persona_sft_data.core import schema
+from persona_sft_data.core.config import require_int, require_mapping, require_number
 from persona_sft_data.core.registry import STAGES
 from persona_sft_data.core.runner import StageContext, metric
 
@@ -35,6 +36,18 @@ class AssembleSettings:
     ratios: dict[str, float]
     split: dict[str, float]
     max_sessions: int = 8000
+
+    def __post_init__(self) -> None:
+        """값도 로드 시점에 본다. 여기까지 오는 데 파이프라인 전체가 돌아 있다.
+
+        비율의 합이 1인지와 split의 키·합은 ``validate_pipeline``이 단계 관계를 볼 때
+        확인하므로 여기서 겹치지 않는다. 이 메서드는 그 검사들이 매핑을 전제로
+        ``dict(...)``를 부르기 전에, 매핑인지와 각 값이 음수가 아닌지만 본다.
+        """
+        require_int("stages.assemble.max_sessions", self.max_sessions, minimum=1)
+        for bucket, value in require_mapping("stages.assemble.ratios", self.ratios).items():
+            require_number(f"stages.assemble.ratios.{bucket}", value, minimum=0)
+        require_mapping("stages.assemble.split", self.split)
 
 
 @STAGES.register("assemble", origin="builtin")
