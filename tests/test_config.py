@@ -109,7 +109,6 @@ def test_teacher_config_defaults_and_unknown_keys():
         TeacherConfig.from_dict("t", {"model": "m"})
 
 
-@pytest.mark.xfail(reason="Task 9에서 포맷 플러그인이 등록되면 통과")
 def test_source_config_needs_exactly_one_of_url_or_path(tmp_path):
     good = {"format": "tsv", "url": "http://x/a.tsv", "fields": ["a"], "language": "ko", "license": "mit"}
     cfg = PipelineConfig.load(write_config(tmp_path, sources={"s": good}))

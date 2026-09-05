@@ -15,6 +15,9 @@ BUILTIN_MODULES: tuple[str, ...] = (
     "persona_sft_data.teacher.openai_compat",
     "persona_sft_data.teacher.fake",
     "persona_sft_data.profiles",
+    "persona_sft_data.sources.formats",
+    "persona_sft_data.sources.extractors",
+    "persona_sft_data.sources.translate",
 )
 
 _loaded = False
