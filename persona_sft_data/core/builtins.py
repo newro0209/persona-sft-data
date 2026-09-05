@@ -21,6 +21,8 @@ BUILTIN_MODULES: tuple[str, ...] = (
     "persona_sft_data.stages.ingest",
     "persona_sft_data.stages.dialogue",
     "persona_sft_data.stages.respond",
+    "persona_sft_data.stages.filter",
+    "persona_sft_data.stages.assemble",
 )
 
 _loaded = False
