@@ -60,6 +60,45 @@ def test_draws_each_bucket_to_its_share_and_reports_shortfall(tmp_path):
     assert manifest["profile"] == "dummy"
 
 
+def test_split_files_carry_only_what_the_runner_kept(tmp_path):
+    """split 파일은 러너를 통과한 것만 담아야 한다.
+
+    assemble이 run에서 split을 쓰면 러너의 지문 중복 제거·게이트를 우회해, 거절된
+    세션이 train/val/test에 남고 export가 그것을 데이터셋에 싣는다.
+    """
+    cfg = _config(tmp_path, {"dialogue": 0.5, "respond": 0.5})
+    twins = _s(1, "dialogue")
+    twin = {**twins, "id": "respond-1", "source": "respond"}          # 버킷 간 중복 한 쌍
+    emoji = {**_s(2, "respond"), "turns": [{"role": "user", "text": "respond 질문 2"},
+                                           {"role": "assistant", "text": "잘래 🐾"}]}
+    write_jsonl(cfg.filtered("dialogue"), [twins, _s(2, "dialogue")])
+    write_jsonl(cfg.filtered("respond"), [twin, emoji])
+
+    stats = execute(AssembleStage(), cfg, log=lambda m: None)
+    assert (stats.produced, stats.rejected, stats.duplicates) == (2, 1, 1)
+
+    splits = {s: [r["id"] for r in read_jsonl(cfg.final(s))] for s in ("train", "val", "test")}
+    in_splits = [i for ids in splits.values() for i in ids]
+    assert len(in_splits) == stats.produced == len(set(in_splits))
+    rejected = {r["id"] for r in read_jsonl(cfg.rejected_path(cfg.final("assemble")))}
+    assert "respond-2" in rejected and len(rejected & {"dialogue-1", "respond-1"}) == 1
+    assert not rejected & set(in_splits)
+
+    manifest = json.loads((cfg.data_root / "final" / "manifest.json").read_text(encoding="utf-8"))
+    assert sum(manifest["split_sessions"].values()) == stats.produced
+    assert sum(manifest["selected"].values()) == stats.produced
+    assert {k: v["sessions"] for k, v in manifest["files"].items()} == {k: len(v) for k, v in splits.items()}
+
+
+def test_stats_and_manifest_are_written_with_lf(tmp_path):
+    """같은 내용이 플랫폼마다 다른 sha256이 되면 export가 적는 manifest 해시가 무의미해진다."""
+    cfg = _config(tmp_path, {"dialogue": 1.0})
+    write_jsonl(cfg.filtered("dialogue"), [_s(i, "dialogue") for i in range(4)])
+    execute(AssembleStage(), cfg, log=lambda m: None)
+    assert b"\r\n" not in (cfg.data_root / "final" / "manifest.json").read_bytes()
+    assert b"\r\n" not in cfg.stats_path(cfg.final("assemble")).read_bytes()
+
+
 def test_missing_filtered_input_names_filter(tmp_path):
     cfg = _config(tmp_path, {"dialogue": 1.0})
     with pytest.raises(FileNotFoundError, match="filter"):

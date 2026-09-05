@@ -5,16 +5,27 @@
 쓴다. 거절은 버리지 않고 사유와 함께 ``.rejected.jsonl``에 남긴다 — 버려진 것을
 셀 수 없으면 품질을 말할 수 없다. 사람이 읽을 표본 200개도 같이 떨군다.
 
+단계가 스스로 거절한 레코드도 파일에 남아야 하므로 ``reject_record()`` 센티널로
+러너에 넘긴다. 예외는 남길 레코드 자체가 없는 거절 — 교사 호출 실패
+(``teacher_error``), 응답 파싱 실패(``unparseable``), 빈 응답(``empty_reply``)은
+쓸 것이 없어 ``metric(rejected=...)``으로 개수만 센다.
+
+출력·거절 파일은 ``.tmp``에 쓰고 단계가 끝까지 성공한 뒤에만 제자리로 옮긴다.
+교사 서버가 죽은 재실행이 전날 산출물을 0바이트로 지우는 일이 없어야 한다.
+
 파일을 직접 쓰는 단계(``mode="artifact"``)는 컨텍스트만 받고 자기 통계를 돌려준다.
+러너가 통과시킨 것을 근거로 파생 파일을 써야 하는 단계는 ``finalize(ctx, stats)``를
+선언한다 — 러너가 출력을 제자리에 옮기고 통계·표본까지 쓴 뒤에 부른다.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import platform
 import random
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -89,8 +100,17 @@ class StageStats:
 
 
 def metric(**kwargs: Any) -> dict[str, Any]:
-    """단계가 교사 사용량이나 자기 거절을 보고할 때 yield 하는 센티널."""
+    """단계가 교사 사용량이나 남길 레코드가 없는 거절을 보고할 때 yield 하는 센티널."""
     return {"_metric": True, **kwargs}
+
+
+def reject_record(record: Mapping[str, Any], reasons: Sequence[str]) -> dict[str, Any]:
+    """단계가 스스로 거절한 레코드를 러너에 넘길 때 yield 하는 센티널.
+
+    러너가 사유를 세고 ``.rejected.jsonl``에 ``_reject_reasons``와 함께 남긴다.
+    같은 거절을 ``metric(rejected=...)``으로 또 세면 이중 계수가 되니 둘 중 하나만 쓴다.
+    """
+    return {"_reject": True, "record": dict(record), "reasons": [str(r) for r in reasons]}
 
 
 def gate_settings_for(config: PipelineConfig) -> GateSettings:
@@ -136,8 +156,18 @@ def _display_path(path: Path, root: Path) -> str:
         return str(path)
 
 
+def _tmp_path(path: Path) -> Path:
+    """제자리 교체 전에 쓰는 임시 경로. 같은 디렉터리여야 ``os.replace``가 원자적이다."""
+    return path.with_name(path.name + ".tmp")
+
+
 def execute(stage: Any, config: PipelineConfig, *, log: Callable[[str], None] = print) -> StageStats:
-    """단계 하나를 돌린다."""
+    """단계 하나를 돌린다.
+
+    출력과 거절 파일은 ``.tmp``에 쓰고 단계가 끝까지 성공한 뒤에만 제자리로 옮긴다.
+    첫 반복에서 터지는 예외(교사 죽음, 입력 없음, 단계의 ValueError)에도 지난
+    산출물·통계·표본은 그대로 남는다. 예외는 그대로 올려 호출자가 메시지를 낸다.
+    """
     ctx = build_context(stage, config, log=log)
     if stage.mode == "artifact":
         return stage.run(ctx)
@@ -154,53 +184,72 @@ def execute(stage: Any, config: PipelineConfig, *, log: Callable[[str], None] = 
 
     seen: set[str] = set()
     kept: list[dict[str, Any]] = []
+    rejected_path = config.rejected_path(output)
+    out_tmp, rej_tmp = _tmp_path(output), _tmp_path(rejected_path)
     t0 = time.time()
-    with output.open("w", encoding="utf-8", newline="\n") as out, \
-         config.rejected_path(output).open("w", encoding="utf-8", newline="\n") as rej:
+    try:
+        with out_tmp.open("w", encoding="utf-8", newline="\n") as out, \
+             rej_tmp.open("w", encoding="utf-8", newline="\n") as rej:
 
-        def drop(record: Mapping[str, Any], reasons: list[str]) -> None:
-            """사유를 세고 rejected 파일에 남긴다. ``rejected`` 카운트는 호출자가 정한다."""
-            for reason in reasons:
-                stats.reject_reasons[reason] = stats.reject_reasons.get(reason, 0) + 1
-            schema.append_jsonl(rej, {**record, "_reject_reasons": reasons})
+            def drop(record: Mapping[str, Any], reasons: list[str]) -> None:
+                """사유를 세고 rejected 파일에 남긴다. ``rejected`` 카운트는 호출자가 정한다."""
+                for reason in reasons:
+                    stats.reject_reasons[reason] = stats.reject_reasons.get(reason, 0) + 1
+                schema.append_jsonl(rej, {**record, "_reject_reasons": reasons})
 
-        def reject(record: Mapping[str, Any], reasons: list[str]) -> None:
-            stats.rejected += 1
-            drop(record, reasons)
+            def reject(record: Mapping[str, Any], reasons: list[str]) -> None:
+                stats.rejected += 1
+                drop(record, reasons)
 
-        for record in stage.run(ctx):
-            if record.get("_metric"):
-                _absorb_metric(stats, record)
-                continue
-            try:
-                normalized = kind.normalize(record)
-            except schema.SchemaError as exc:
-                reject(record, [f"schema:{exc}"])
-                continue
-            fingerprint = kind.fingerprint(normalized)
-            if fingerprint in seen:
-                stats.duplicates += 1
-                drop(normalized, ["duplicate"])
-                continue
-            seen.add(fingerprint)
-            if ctx.gate is not None:
-                verdict = ctx.gate.check(normalized)
-                if not verdict.ok:
-                    reject(normalized, verdict.reasons)
+            for record in stage.run(ctx):
+                if record.get("_metric"):
+                    _absorb_metric(stats, record)
                     continue
-            schema.append_jsonl(out, normalized)
-            stats.produced += 1
-            if len(kept) < SAMPLE_SIZE:
-                kept.append(normalized)
-            elif ctx.rng.random() < 0.001:
-                kept[ctx.rng.randrange(SAMPLE_SIZE)] = normalized
+                if record.get("_reject"):
+                    # 단계가 스스로 거절한 레코드. 정규화·게이트를 다시 걸 필요가 없다.
+                    reject(record.get("record") or {}, list(record.get("reasons") or ["rejected"]))
+                    continue
+                try:
+                    normalized = kind.normalize(record)
+                except schema.SchemaError as exc:
+                    reject(record, [f"schema:{exc}"])
+                    continue
+                fingerprint = kind.fingerprint(normalized)
+                if fingerprint in seen:
+                    stats.duplicates += 1
+                    drop(normalized, ["duplicate"])
+                    continue
+                seen.add(fingerprint)
+                if ctx.gate is not None:
+                    verdict = ctx.gate.check(normalized)
+                    if not verdict.ok:
+                        reject(normalized, verdict.reasons)
+                        continue
+                schema.append_jsonl(out, normalized)
+                stats.produced += 1
+                if len(kept) < SAMPLE_SIZE:
+                    kept.append(normalized)
+                elif ctx.rng.random() < 0.001:
+                    kept[ctx.rng.randrange(SAMPLE_SIZE)] = normalized
+    except BaseException:
+        # 반쪽 산출물을 남기지 않는다. 지난 출력·통계·표본은 손대지 않은 채 예외를 올린다.
+        out_tmp.unlink(missing_ok=True)
+        rej_tmp.unlink(missing_ok=True)
+        raise
+
+    os.replace(out_tmp, output)
+    os.replace(rej_tmp, rejected_path)
 
     stats.seconds = round(time.time() - t0, 2)
     stats.reject_reasons = dict(sorted(stats.reject_reasons.items(), key=lambda kv: -kv[1]))
     schema.write_jsonl(config.sample_path(output), kept)
     config.stats_path(output).write_text(
-        json.dumps(stats.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps(stats.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8", newline="\n"
     )
+
+    finalize = getattr(stage, "finalize", None)
+    if callable(finalize):
+        finalize(ctx, stats)
 
     total = stats.produced + stats.rejected
     rate = f"{stats.produced / total:.1%}" if total else "n/a"

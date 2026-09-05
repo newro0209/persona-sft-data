@@ -6,8 +6,8 @@ import pytest
 
 from persona_sft_data.core.config import PipelineConfig
 from persona_sft_data.core.registry import STAGES, TEACHERS
-from persona_sft_data.core.runner import StageStats, execute, metric
-from persona_sft_data.core.schema import read_jsonl
+from persona_sft_data.core.runner import StageStats, execute, metric, reject_record
+from persona_sft_data.core.schema import read_jsonl, write_jsonl
 from tests.conftest import write_config
 
 
@@ -77,6 +77,51 @@ class Reader:
         yield from ctx.read("gen")
 
 
+class Boom:
+    """첫 반복에서 터지는 단계. 교사가 죽었거나 입력이 없을 때와 같은 자리다."""
+
+    name = config_name = "boom"
+    mode, record_kind, produces = "records", "session", "raw"
+    settings_type = Empty
+    def requires(self, config): return ()
+    def instances(self, config): return [self]
+    def preflight(self, ctx): pass
+    def run(self, ctx):
+        raise ValueError("교사가 죽었다")
+        yield {}   # 제너레이터로 만들려고 둔다. 예외는 첫 반복에서 나온다.
+
+
+class Judge:
+    """자기 판단으로 거절한 레코드를 센티널로 넘기는 단계."""
+
+    name = config_name = "judge"
+    mode, record_kind, produces = "records", "session", "raw"
+    settings_type = Empty
+    def requires(self, config): return ()
+    def instances(self, config): return [self]
+    def preflight(self, ctx): pass
+    def run(self, ctx):
+        yield _session(1, "응, 같이 놀자.")
+        yield reject_record(_session(2, "응, 같이 놀자아."), ["overused"])
+
+
+class Fin:
+    """finalize 훅을 선언한 단계. 러너가 통과시킨 것만 보고 파생 파일을 쓴다."""
+
+    name = config_name = "fin"
+    mode, record_kind, produces = "records", "session", "raw"
+    settings_type = Empty
+    def requires(self, config): return ()
+    def instances(self, config): return [self]
+    def preflight(self, ctx): pass
+    def run(self, ctx):
+        yield _session(1, "응, 같이 놀자.")
+        yield _session(2, "잘래 🐾")                  # 게이트 위반
+    def finalize(self, ctx, stats):
+        ids = [r["id"] for r in read_jsonl(ctx.output)]
+        (ctx.output.parent / "fin.txt").write_text(f"{stats.produced}:{','.join(ids)}", encoding="utf-8")
+
+
 class FakeTeacherFactory:
     """설정의 ``kind: "fake"``가 통과하도록 두는 최소 팩토리. 내장 fake가 있으면 그것을 쓴다."""
 
@@ -87,7 +132,7 @@ class FakeTeacherFactory:
 
 @pytest.fixture(autouse=True)
 def _plugins():
-    for cls in (Gen, Utt, Art, Reader):
+    for cls in (Gen, Utt, Art, Reader, Boom, Judge, Fin):
         STAGES.add(cls.name, cls, origin="plugins")
     if "fake" not in TEACHERS.names():
         TEACHERS.add("fake", FakeTeacherFactory(), origin="plugins")
@@ -135,3 +180,51 @@ def test_reader_sees_only_what_the_upstream_kept(tmp_path):
     execute(Gen(), cfg, log=lambda m: None)
     stats = execute(Reader(), cfg, log=lambda m: None)
     assert stats.produced == 1 and cfg.filtered("reader").exists()
+
+
+def test_a_failing_stage_leaves_the_previous_output_stats_and_sample_alone(tmp_path):
+    """교사가 죽은 야간 재실행이 전날 산출물을 0바이트로 지우면 안 된다."""
+    cfg = PipelineConfig.load(write_config(tmp_path, stages={"boom": {}}))
+    out = cfg.raw("boom")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    yesterday = [_session(9, "어제 만든 것.")]
+    write_jsonl(out, yesterday)
+    write_jsonl(cfg.sample_path(out), yesterday)
+    cfg.rejected_path(out).write_text("", encoding="utf-8")
+    cfg.stats_path(out).write_text('{"produced": 58}', encoding="utf-8")
+    before = out.read_bytes()
+
+    with pytest.raises(ValueError, match="교사가 죽었다"):
+        execute(Boom(), cfg, log=lambda m: None)
+
+    assert out.read_bytes() == before
+    assert [r["id"] for r in read_jsonl(cfg.sample_path(out))] == ["g-9"]
+    assert json.loads(cfg.stats_path(out).read_text(encoding="utf-8"))["produced"] == 58
+    assert not list(out.parent.glob("*.tmp"))
+
+
+def test_a_successful_stage_leaves_no_tmp_files(tmp_path):
+    cfg = PipelineConfig.load(write_config(tmp_path, stages={"gen": {"teacher": "fake"}}))
+    execute(Gen(), cfg, log=lambda m: None)
+    assert list(read_jsonl(cfg.raw("gen")))
+    assert not list((cfg.data_root / "raw").glob("*.tmp"))
+
+
+def test_a_stage_rejection_lands_in_the_rejected_file_and_is_counted_once(tmp_path):
+    cfg = PipelineConfig.load(write_config(tmp_path, stages={"judge": {}}))
+    stats = execute(Judge(), cfg, log=lambda m: None)
+    assert (stats.produced, stats.rejected, stats.duplicates) == (1, 1, 0)
+    assert stats.reject_reasons == {"overused": 1}
+    out = cfg.raw("judge")
+    assert [r["id"] for r in read_jsonl(out)] == ["g-1"]
+    rejected = list(read_jsonl(cfg.rejected_path(out)))
+    assert [(r["id"], r["_reject_reasons"]) for r in rejected] == [("g-2", ["overused"])]
+
+
+def test_finalize_is_optional_and_sees_only_what_passed(tmp_path):
+    cfg = PipelineConfig.load(write_config(tmp_path, stages={"fin": {}, "gen": {"teacher": "fake"}}))
+    execute(Fin(), cfg, log=lambda m: None)
+    assert (cfg.raw("fin").parent / "fin.txt").read_text(encoding="utf-8") == "1:g-1"
+    # 훅이 없는 단계는 영향받지 않는다.
+    execute(Gen(), cfg, log=lambda m: None)
+    assert not hasattr(Gen(), "finalize")

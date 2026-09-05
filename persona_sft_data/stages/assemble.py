@@ -46,6 +46,12 @@ class AssembleStage:
     produces = "final"
     settings_type = AssembleSettings
 
+    def __init__(self) -> None:
+        # run이 뽑은 것과 finalize가 세는 것을 잇는 장부. 한 execute 안에서 run 다음에
+        # finalize가 오는 한 쌍이므로 인스턴스에 둔다.
+        self._bucket_of: dict[str, str] = {}
+        self._shortfall: dict[str, int] = {}
+
     def requires(self, config: Any) -> tuple[str, ...]:
         return ("filter",)
 
@@ -68,28 +74,54 @@ class AssembleStage:
 
         selected: list[dict[str, Any]] = []
         shortfall: dict[str, int] = {}
-        taken: dict[str, int] = {}
+        self._bucket_of = {}
         for bucket, pool in pools.items():
             ctx.rng.shuffle(pool)
             want = int(round(int(s.max_sessions) * ratios[bucket]))
             take = pool[:want]
-            taken[bucket] = len(take)
             if len(take) < want:
                 shortfall[bucket] = want - len(take)
+            for record in take:
+                self._bucket_of[str(record.get("id"))] = bucket
             selected.extend(take)
             ctx.log(f"[assemble] {bucket}: {len(pool):,} available, {want:,} wanted, {len(take):,} taken")
         if shortfall:
             ctx.log(f"[assemble] SHORTFALL (sessions): {shortfall}")
+        self._shortfall = shortfall
 
+        # split은 여기서 붙인다. 파일로 나누는 것은 러너가 거절을 걸러 낸 뒤 finalize가 한다.
         ctx.rng.shuffle(selected)
         n = len(selected)
         n_val = int(n * split["val"])
         n_test = int(n * split["test"])
-        by_split: dict[str, list[dict[str, Any]]] = {k: [] for k in SPLITS}
         for i, record in enumerate(selected):
             record["split"] = "val" if i < n_val else "test" if i < n_val + n_test else "train"
-            by_split[record["split"]].append(record)
             yield record
+
+        ctx.log(f"[assemble] {n:,} sessions을 러너에 넘겼다")
+        yield metric(extra={"shortfall": shortfall})
+
+    def finalize(self, ctx: StageContext, stats: Any) -> None:
+        """러너가 통과시킨 것만으로 split 파일과 manifest를 쓴다.
+
+        run에서 쓰면 러너의 정규화·지문 중복 제거·게이트를 우회해, 러너가 거절한
+        세션이 split 파일에 남고 export가 그것을 데이터셋에 싣는다. 그래서 러너가
+        제자리에 옮겨 놓은 자기 출력(``final/assemble.jsonl``)을 다시 읽어 나눈다.
+        """
+        assert ctx.output is not None
+        s = ctx.settings
+        ratios = dict(s.ratios)
+        split = dict(s.split)
+
+        by_split: dict[str, list[dict[str, Any]]] = {k: [] for k in SPLITS}
+        selected: dict[str, int] = {b: 0 for b in ratios}
+        for record in schema.read_jsonl(ctx.output):
+            name = str(record.get("split", ""))
+            if name not in by_split:
+                raise schema.SchemaError(f"{ctx.output}에 split이 없는 레코드가 있다: id={record.get('id')!r}")
+            by_split[name].append(record)
+            bucket = self._bucket_of.get(str(record.get("id"))) or str(record.get("source") or "unknown")
+            selected[bucket] = selected.get(bucket, 0) + 1
 
         final_dir = ctx.config.data_root / "final"
         files: dict[str, dict[str, Any]] = {}
@@ -110,16 +142,18 @@ class AssembleStage:
             "student": {"model": ctx.config.student.model, "chat_template": ctx.config.student.chat_template},
             "requested_ratios": ratios,
             "max_sessions": int(s.max_sessions),
-            "selected": taken,
-            "shortfall": shortfall,
+            "selected": selected,
+            "shortfall": self._shortfall,
             "requested_split": split,
             "split_sessions": {k: len(v) for k, v in by_split.items()},
             "files": files,
             "stages": _stage_stats(ctx.config),
         }
-        (final_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-        ctx.log(f"[assemble] {n:,} sessions; manifest -> final/manifest.json")
-        yield metric(extra={"selected": taken, "shortfall": shortfall})
+        (final_dir / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n"
+        )
+        total = sum(len(v) for v in by_split.values())
+        ctx.log(f"[assemble] {total:,} sessions; manifest -> final/manifest.json")
 
 
 def _describe(path: Path, root: Path) -> str:

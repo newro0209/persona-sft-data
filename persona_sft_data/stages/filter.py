@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from persona_sft_data.core.registry import STAGES
-from persona_sft_data.core.runner import StageContext, metric
+from persona_sft_data.core.runner import StageContext, reject_record
 
 
 @dataclass(frozen=True)
@@ -60,8 +60,10 @@ class FilterStage:
                 if counts[text] > limit:
                     overused = True
             if overused:
+                # 거절 레코드도 파일에 남아야 하므로 센티널로 넘긴다. 러너가 세니
+                # metric(rejected=...)으로 또 세지 않는다 — 이중 계수가 된다.
                 dropped += 1
+                yield reject_record(record, ["assistant_line_overused"])
                 continue
             yield record
-        yield metric(rejected=dropped, reject_reasons={"assistant_line_overused": dropped} if dropped else {})
         ctx.log(f"[{self.name}] distinct assistant utterances: {len(counts):,}; dropped for overuse (> {limit}x): {dropped:,}")

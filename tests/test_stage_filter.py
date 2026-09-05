@@ -44,6 +44,21 @@ def test_overused_assistant_lines_are_dropped_and_the_gate_still_applies(tmp_pat
     assert stats.produced == 3 and stats.rejected == 2
 
 
+def test_overuse_rejects_are_kept_in_the_rejected_file_and_counted_once(tmp_path):
+    """거절 레코드가 파일에 남지 않으면 status가 파일 줄 수로 세는 수율이 거짓이 된다."""
+    cfg = _config(tmp_path, max_identical_assistant_turns=2)
+    write_jsonl(cfg.raw("dialogue"), [_s(i, "응, 좋아.") for i in range(1, 5)])
+    stats = execute(FilterStage("dialogue"), cfg, log=lambda m: None)
+
+    out = cfg.filtered("dialogue")
+    assert [r["id"] for r in read_jsonl(out)] == ["dialogue-1", "dialogue-2"]
+    rejected = list(read_jsonl(cfg.rejected_path(out)))
+    assert [r["id"] for r in rejected] == ["dialogue-3", "dialogue-4"]
+    assert all(r["_reject_reasons"] == ["assistant_line_overused"] for r in rejected)
+    # 센티널로 넘긴 거절을 metric으로 또 세면 rejected가 4가 된다.
+    assert stats.rejected == 2 and stats.reject_reasons == {"assistant_line_overused": 2}
+
+
 def test_turn_bounds_come_from_filter_settings(tmp_path):
     cfg = _config(tmp_path, max_turns=2)
     long = {"id": "d-1", "source": "dialogue", "turns": [
