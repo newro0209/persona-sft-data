@@ -12,3 +12,6 @@ build/
 
 # SDD workspace
 .superpowers/
+
+# pytest
+.pytest_cache/
